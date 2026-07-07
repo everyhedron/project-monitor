@@ -199,8 +199,8 @@ export class Dashboard {
   }
 
   private updateStatusBar(projects: Project[]): void {
-    const goodCount = projects.filter((project) => project.status !== "stopped" && project.status !== "stale").length;
-    this.statusBarItem.text = `$(folder-library) ${goodCount}/${projects.length}`;
+    const badCount = projects.filter((project) => project.status === "stopped" || project.status === "stale").length;
+    this.statusBarItem.text = `$(folder-library) ${badCount}/${projects.length}`;
     this.statusBarItem.tooltip = createStatusTooltip(projects);
     this.statusBarItem.show();
   }
@@ -653,6 +653,11 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
       margin-bottom: 12px;
     }
 
+    .card-heading {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
     .project-title-row {
       align-items: baseline;
       display: flex;
@@ -662,7 +667,6 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
     }
 
     h2 {
-      flex: 1 1 auto;
       font-size: 16px;
       line-height: 1.25;
       margin: 0;
@@ -683,7 +687,7 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
       flex: 0 0 auto;
       flex-wrap: nowrap;
       gap: 8px;
-      margin-left: auto;
+      margin-top: 3px;
       white-space: nowrap;
     }
 
@@ -1022,7 +1026,7 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
     <header>
       <div>
         <h1>Project Monitor</h1>
-        <div class="summary"><span id="selection-summary">0 selected.</span> <span class="tracked-count" title="${escapeAttr(statusTooltip)}">${projects.length} tracked</span>. <span id="refresh-countdown" data-refresh-interval-ms="${config.refreshIntervalMs}">Refreshing in ${Math.round(config.refreshIntervalMs / 1000)}s</span> on Projects.</div>
+        <div class="summary"><span id="selection-summary">0 selected.</span> <span class="tracked-count" title="${escapeAttr(statusTooltip)}">${projects.length} tracked</span>. <span id="refresh-countdown" data-refresh-interval-ms="${config.refreshIntervalMs}">Refreshing in ${Math.round(config.refreshIntervalMs / 1000)}s</span>.</div>
       </div>
       <div class="header-actions">
         <label class="checkbox-control"><input type="checkbox" data-setting="openOnStartup" ${config.openOnStartup ? "checked" : ""}> Open on startup</label>
@@ -1340,11 +1344,11 @@ function renderProjectCard(project: Project): string {
 
   return `<article class="card" data-project-path="${escapeAttr(project.path)}" data-parent-path="${escapeAttr(path.dirname(project.path))}">
     <div class="card-top">
-      <div>
+      <div class="card-heading">
         <div class="project-title-row">
           ${renderProjectTitle(project, "h2")}
-          ${renderProjectActions(project)}
         </div>
+        ${renderProjectActions(project)}
         <div class="path"><button class="path-button" data-command="openFolder" data-path="${escapeAttr(project.path)}">${escapeHtml(project.path)}</button></div>
       </div>
       ${renderStatusBadge(project.status)}
