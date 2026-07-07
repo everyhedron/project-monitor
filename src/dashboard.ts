@@ -27,6 +27,7 @@ export class Dashboard {
   private refreshInFlight: Promise<void> | undefined;
   private activeTab = "projects-view";
   private timer: NodeJS.Timeout | undefined;
+  private nextRefreshAt = 0;
   private lastProjects: Project[] = [];
   private readonly statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 90);
 
@@ -105,21 +106,18 @@ export class Dashboard {
           return;
         }
         if (panel.visible) {
-          this.syncTimerForActiveTab();
           void this.refresh();
-        } else {
-          this.stopTimer();
         }
       },
       undefined,
       this.context.subscriptions
     );
 
-    this.syncTimerForActiveTab();
+    this.startTimer();
     void this.refresh();
   }
 
-  async refresh(): Promise<void> {
+  async refresh(resetTimer = true): Promise<void> {
     if (!this.panel) {
       return;
     }
@@ -127,11 +125,17 @@ export class Dashboard {
       return this.refreshInFlight;
     }
 
-    this.refreshInFlight = this.refreshNow();
+    this.refreshInFlight = this.refreshNow(resetTimer);
     try {
       await this.refreshInFlight;
+    } catch (error) {
+      logError("Refresh failed.", error);
     } finally {
       this.refreshInFlight = undefined;
+      if (this.panel && !this.timer) {
+        this.nextRefreshAt = Date.now() + this.getConfig().refreshIntervalMs;
+        this.startTimer();
+      }
     }
   }
 
@@ -139,7 +143,8 @@ export class Dashboard {
     if (!this.panel) {
       return;
     }
-    this.syncTimerForActiveTab();
+    this.nextRefreshAt = Date.now() + this.getConfig().refreshIntervalMs;
+    this.startTimer();
   }
 
   dispose(): void {
@@ -149,14 +154,18 @@ export class Dashboard {
 
   private startTimer(): void {
     this.stopTimer();
-    if (!this.panel?.visible || this.activeTab === "suggestions-view") {
+    if (!this.panel) {
       return;
     }
-    this.timer = setInterval(() => {
-      if (!this.refreshInFlight) {
-        void this.refresh();
-      }
-    }, this.getConfig().refreshIntervalMs);
+    const now = Date.now();
+    const refreshIntervalMs = this.getConfig().refreshIntervalMs;
+    if (this.nextRefreshAt <= now) {
+      this.nextRefreshAt = now + refreshIntervalMs;
+    }
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      void this.refresh(false);
+    }, Math.max(0, this.nextRefreshAt - now));
   }
 
   private stopTimer(): void {
@@ -166,7 +175,7 @@ export class Dashboard {
     }
   }
 
-  private async refreshNow(): Promise<void> {
+  private async refreshNow(resetTimer = true): Promise<void> {
     if (!this.panel) {
       return;
     }
@@ -186,7 +195,11 @@ export class Dashboard {
     }
     this.lastProjects = projects;
     this.updateStatusBar(projects);
-    this.panel.webview.html = renderDashboard(projects, suggestions, config);
+    if (resetTimer || this.nextRefreshAt <= Date.now()) {
+      this.nextRefreshAt = Date.now() + config.refreshIntervalMs;
+    }
+    this.panel.webview.html = renderDashboard(projects, suggestions, config, this.nextRefreshAt);
+    this.startTimer();
   }
 
   private updateStatusBar(projects: Project[]): void {
@@ -204,9 +217,9 @@ export class Dashboard {
       }
 
       if (message.command === "activeTabChanged" && message.tab) {
+        const changed = this.activeTab !== message.tab;
         this.activeTab = message.tab;
-        this.syncTimerForActiveTab();
-        if (message.tab === "suggestions-view") {
+        if (changed && message.tab === "suggestions-view") {
           await this.refresh();
         }
         return;
@@ -343,14 +356,6 @@ export class Dashboard {
     await vscode.commands.executeCommand("workbench.action.pinEditor");
   }
 
-  private syncTimerForActiveTab(): void {
-    if (this.activeTab === "suggestions-view") {
-      this.stopTimer();
-      return;
-    }
-    this.startTimer();
-  }
-
   private async confirmAndRemoveProjects(paths: string[]): Promise<void> {
     const count = new Set(paths).size;
     const label = count === 1 ? "Remove Project" : "Remove Projects";
@@ -418,7 +423,7 @@ export class Dashboard {
   }
 }
 
-function renderDashboard(projects: Project[], suggestions: Suggestion[], config: ProjectMonitorConfig): string {
+function renderDashboard(projects: Project[], suggestions: Suggestion[], config: ProjectMonitorConfig, nextRefreshAt: number): string {
   const statusTooltip = createStatusTooltip(projects);
   const parentFolders = [...new Set(projects.map((project) => path.dirname(project.path)))].sort((a, b) =>
     a.localeCompare(b, undefined, { sensitivity: "base" })
@@ -828,6 +833,11 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
       text-decoration: underline;
     }
 
+    .readme-link.attention,
+    .inline-link.attention {
+      color: var(--vscode-errorForeground, var(--git-bad));
+    }
+
     .actions {
       display: flex;
       flex-wrap: wrap;
@@ -1026,7 +1036,7 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
     <header>
       <div>
         <h1>Project Monitor</h1>
-        <div class="summary"><span id="selection-summary">0 selected.</span> <span class="tracked-count" title="${escapeAttr(statusTooltip)}">${projects.length} tracked</span>. <span id="refresh-countdown" data-refresh-interval-ms="${config.refreshIntervalMs}">Refreshing in ${Math.round(config.refreshIntervalMs / 1000)}s</span>.</div>
+        <div class="summary"><span id="selection-summary">0 selected.</span> <span class="tracked-count" title="${escapeAttr(statusTooltip)}">${projects.length} tracked</span>. <span id="refresh-countdown" data-next-refresh-at="${nextRefreshAt}">Refreshing in ${Math.max(1, Math.ceil((nextRefreshAt - Date.now()) / 1000))}s</span>.</div>
       </div>
       <div class="header-actions">
         <label class="checkbox-control"><input type="checkbox" data-setting="openOnStartup" ${config.openOnStartup ? "checked" : ""}> Open on startup</label>
@@ -1073,7 +1083,7 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
               <th>Git</th>
               <th>TODO</th>
               <th>README</th>
-              <th>License</th>
+              <th>LICENSE</th>
               <th>Path</th>
             </tr>
           </thead>
@@ -1098,8 +1108,7 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
     const selectedPaths = new Set(persistedState.selectedPaths || []);
     const pendingOperations = new Map(persistedState.pendingOperations || []);
     const refreshCountdown = document.getElementById("refresh-countdown");
-    const refreshIntervalMs = Number(refreshCountdown?.dataset.refreshIntervalMs || 0);
-    const refreshStartedAt = Date.now();
+    const nextRefreshAt = Number(refreshCountdown?.dataset.nextRefreshAt || 0);
 
     function showLoading(button) {
       if (button.classList.contains("is-loading")) {
@@ -1185,13 +1194,13 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
     }
 
     function updateRefreshCountdown() {
-      if (!refreshCountdown || !refreshIntervalMs) {
+      if (!refreshCountdown || !nextRefreshAt) {
         return;
       }
 
-      const remainingMs = refreshIntervalMs - (Date.now() - refreshStartedAt);
+      const remainingMs = nextRefreshAt - Date.now();
       if (remainingMs <= 0) {
-        refreshCountdown.textContent = "Refreshing";
+        refreshCountdown.textContent = "Refreshing...";
         return;
       }
 
@@ -1220,7 +1229,7 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
     }
     updateSelectionUi();
     updateRefreshCountdown();
-    if (refreshCountdown && refreshIntervalMs) {
+    if (refreshCountdown && nextRefreshAt) {
       setInterval(updateRefreshCountdown, 1000);
     }
 
@@ -1363,24 +1372,16 @@ function renderProjectCard(project: Project): string {
       <dd>${renderTodoSummary(project.todo, project.path)}</dd>
       <dt>README</dt>
       <dd>${renderReadmeSummary(project.readme)}</dd>
-      <dt>License</dt>
+      <dt>LICENSE</dt>
       <dd>${renderLicenseSummary(project.license)}</dd>
-      ${project.kind === "vsce" ? `<dt>Version</dt><dd>${renderVscodeExtensionVersion(project)}</dd>` : `<dt>Ports</dt><dd>${renderPorts(project)}</dd>`}
+      ${renderPortOrVersionDefinition(project)}
       ${project.kind === "vsce" || project.kind === "static" ? "" : `<dt>Service</dt><dd>${renderServiceSummary(project.service)}</dd>`}
-      <dt>Evidence</dt>
-      <dd>${project.evidence
-        .map((item) =>
-          item.path
-            ? `<a class="inline-link" href="#" title="${escapeAttr(item.proof ?? "")}" data-command="openFile" data-path="${escapeAttr(item.path)}">${escapeHtml(item.label)}</a>`
-            : escapeHtml(item.label)
-        )
-        .join(", ")}</dd>
       ${
         project.publishedRoutes.length > 0
           ? `<dt>Published</dt><dd>${project.publishedRoutes
               .map(
                 (route) =>
-                  `<a class="inline-link" href="${escapeAttr(route.url)}" data-command="openUrl" data-url="${escapeAttr(route.url)}">${escapeHtml(route.url)}</a>`
+                  `<button class="inline-link" data-command="openUrl" data-url="${escapeAttr(route.url)}">${escapeHtml(route.url)}</button>`
               )
               .join(", ")}</dd>`
           : ""
@@ -1394,7 +1395,7 @@ function renderProjectRow(project: Project): string {
     <td><div class="table-project-title">${renderProjectTitle(project, "div")}${renderProjectActions(project)}</div></td>
     <td>${renderStatusBadge(project.status)}</td>
     <td>${escapeHtml(project.kind)}</td>
-    <td>${project.kind === "vsce" ? renderVscodeExtensionVersion(project) : renderPorts(project)}</td>
+    <td>${renderPortOrVersionCell(project)}</td>
     <td>${project.kind === "vsce" || project.kind === "static" ? `<span class="muted-status">n/a</span>` : renderServiceSummary(project.service)}</td>
     <td>${renderGitSummary(project.git)}</td>
     <td>${renderTodoSummary(project.todo, project.path)}</td>
@@ -1413,12 +1414,14 @@ function renderProjectActions(project: Project): string {
 }
 
 function renderProjectTitle(project: Project, tagName: "h2" | "div"): string {
-  const properName = toProperProjectName(project.name);
+  const folderName = project.name;
   const readmeName = project.readme.heading?.trim();
-  const displayName = readmeName || properName;
-  const hasMismatch = readmeName !== undefined && normalizeProjectName(readmeName) !== normalizeProjectName(properName);
-  const className = `${tagName === "h2" ? "" : "table-name"}${hasMismatch ? " title-mismatch" : ""}`.trim();
-  const tooltip = hasMismatch ? `README: ${readmeName}\nFolder: ${properName}` : displayName;
+  const displayName = readmeName || folderName;
+  const hasReadmeName = readmeName !== undefined && readmeName.length > 0;
+  const hasMismatch = hasReadmeName && normalizeProjectName(readmeName) !== normalizeProjectName(folderName);
+  const needsReadmeName = !hasReadmeName;
+  const className = `${tagName === "h2" ? "" : "table-name"}${hasMismatch || needsReadmeName ? " title-mismatch" : ""}`.trim();
+  const tooltip = needsReadmeName ? "README has no title" : hasMismatch ? `README: ${readmeName}\nFolder: ${folderName}` : displayName;
   return `<${tagName}${className ? ` class="${escapeAttr(className)}"` : ""} title="${escapeAttr(tooltip)}">${escapeHtml(displayName)}</${tagName}>`;
 }
 
@@ -1434,9 +1437,33 @@ function renderReadmeSummary(readme: ReadmeSummary): string {
 
 function renderLicenseSummary(license: LicenseSummary): string {
   if (!license.exists || !license.path) {
-    return `<span class="attention">No license</span>`;
+    return `<span class="attention">No LICENSE</span>`;
   }
   return `<button class="readme-link" data-command="openFile" data-path="${escapeAttr(license.path)}" title="${escapeAttr(license.path)}">${escapeHtml(license.label || "LICENSE")}</button>`;
+}
+
+function renderPortOrVersionDefinition(project: Project): string {
+  if (project.kind === "vsce") {
+    return `<dt>Version</dt><dd>${renderVscodeExtensionVersion(project)}</dd>`;
+  }
+
+  if (project.kind === "static") {
+    return "";
+  }
+
+  return `<dt>Ports</dt><dd>${renderPorts(project)}</dd>`;
+}
+
+function renderPortOrVersionCell(project: Project): string {
+  if (project.kind === "vsce") {
+    return renderVscodeExtensionVersion(project);
+  }
+
+  if (project.kind === "static") {
+    return `<span class="muted-status">n/a</span>`;
+  }
+
+  return renderPorts(project);
 }
 
 function renderPorts(project: Project): string {
@@ -1444,7 +1471,7 @@ function renderPorts(project: Project): string {
     return project.ports
       .map((port) => {
         const url = `http://localhost:${port}`;
-        return `<a class="inline-link" href="${escapeAttr(url)}" data-command="openUrl" data-url="${escapeAttr(url)}">${port}</a>`;
+        return `<button class="inline-link" data-command="openUrl" data-url="${escapeAttr(url)}">${port}</button>`;
       })
       .join(", ");
   }
@@ -1461,7 +1488,12 @@ function renderVscodeExtensionVersion(project: Project): string {
   const installed = extension?.installedVersion ?? "not installed";
   const latest = extension?.latestVersion ?? "unknown";
   const isCurrent = extension?.installedVersion !== undefined && extension.installedVersion === extension.latestVersion;
-  return `<span class="${isCurrent ? "" : "attention"}">${escapeHtml(installed)} / ${escapeHtml(latest)}</span>`;
+  const label = `${installed} / ${latest}`;
+  const className = isCurrent ? "readme-link" : "readme-link attention";
+  if (extension?.packagePath) {
+    return `<button class="${className}" data-command="openFolder" data-path="${escapeAttr(extension.packagePath)}" title="${escapeAttr(extension.packagePath)}">${escapeHtml(label)}</button>`;
+  }
+  return `<span class="${isCurrent ? "" : "attention"}">${escapeHtml(label)}</span>`;
 }
 
 function renderServiceSummary(service: ServiceSummary | undefined): string {
@@ -1505,7 +1537,7 @@ function renderGitSummary(git: GitStatus): string {
     segments.push(gitSegment("no remote", false));
   } else if (git.synced) {
     segments.push(gitSegment("synced", true));
-  } else {
+  } else if (!git.hasUnstagedChanges && !git.hasUntrackedChanges) {
     segments.push(gitSegment("unsynced", false));
   }
 
@@ -1534,7 +1566,7 @@ function emptyGitStatus(): GitStatus {
 
 function renderTodoSummary(todo: TodoSummary, projectPath: string): string {
   if (!todo.exists) {
-    return `<span class="muted-status">No TODO.md</span>`;
+    return `<span class="attention">No TODO</span>`;
   }
   const todoPath = path.join(projectPath, "TODO.md");
   if (todo.total === 0) {

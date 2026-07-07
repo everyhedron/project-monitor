@@ -530,7 +530,12 @@ async function applyStaticRoute(
       continue;
     }
 
-    const target = await canonicalize(path.join(resolvedDir, entry.name));
+    const symlinkPath = path.join(resolvedDir, entry.name);
+    const target = await canonicalize(symlinkPath);
+    if (target === symlinkPath) {
+      logWarningOnce(`static-route-symlink:${symlinkPath}`, `Unable to resolve nginx static symlink ${symlinkPath}.`);
+      continue;
+    }
     const url = joinUrlPath(route.domain, route.locationPath, entry.name);
 
     const project = projectByPath.get(target);
@@ -676,7 +681,8 @@ async function detectProject(projectPath: string, installedExtensions: Map<strin
         ? {
             id: packageInfo.extensionId,
             installedVersion: installedExtension?.version,
-            latestVersion: packageInfo.version
+            latestVersion: packageInfo.version,
+            packagePath: await findVscodePackagePath(projectPath, packageInfo.name, packageInfo.version)
           }
         : undefined
     };
@@ -722,6 +728,7 @@ async function safeReadNames(projectPath: string): Promise<string[]> {
 async function readPackageInfo(packageJsonPath: string): Promise<{
   scripts: Set<string>;
   dependencies: Set<string>;
+  name?: string;
   extensionId?: string;
   version?: string;
   isVscodeExtension: boolean;
@@ -754,11 +761,35 @@ async function readPackageInfo(packageJsonPath: string): Promise<{
         ? `${parsed.publisher}.${parsed.name}`.toLowerCase()
         : undefined;
     const version = typeof parsed.version === "string" ? parsed.version : undefined;
-    return { scripts, dependencies, extensionId, version, isVscodeExtension };
+    const name = typeof parsed.name === "string" ? parsed.name : undefined;
+    return { scripts, dependencies, name, extensionId, version, isVscodeExtension };
   } catch (error) {
     logWarningOnce(`package-json:${packageJsonPath}`, `Unable to parse package.json at ${packageJsonPath}.`, error);
     return { scripts: new Set(), dependencies: new Set(), isVscodeExtension: false };
   }
+}
+
+async function findVscodePackagePath(
+  projectPath: string,
+  packageName: string | undefined,
+  version: string | undefined
+): Promise<string | undefined> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(projectPath);
+  } catch (error) {
+    logWarningOnce(`vsix:${projectPath}`, `Unable to scan VSIX packages in ${projectPath}.`, error);
+    return undefined;
+  }
+
+  const vsixFiles = entries.filter((entry) => entry.endsWith(".vsix"));
+  if (vsixFiles.length === 0) {
+    return undefined;
+  }
+
+  const expectedName = packageName && version ? `${packageName}-${version}.vsix` : undefined;
+  const selected = expectedName && vsixFiles.includes(expectedName) ? expectedName : vsixFiles.sort().reverse()[0];
+  return path.join(projectPath, selected);
 }
 
 function findKnownName(names: Set<string>, candidates: string[]): string | undefined {

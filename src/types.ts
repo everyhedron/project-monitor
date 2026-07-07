@@ -45,6 +45,7 @@ export type VscodeExtensionSummary = {
   id?: string;
   installedVersion?: string;
   latestVersion?: string;
+  packagePath?: string;
 };
 
 export type ServiceSummary = {
