@@ -35,6 +35,25 @@ export type ReadmeSummary = {
   section?: string;
 };
 
+export type LicenseSummary = {
+  exists: boolean;
+  path?: string;
+  label?: string;
+};
+
+export type VscodeExtensionSummary = {
+  id?: string;
+  installedVersion?: string;
+  latestVersion?: string;
+};
+
+export type ServiceSummary = {
+  name?: string;
+  systemPath?: string;
+  projectSymlinkPath?: string;
+  copyCommand?: string;
+};
+
 export type Evidence = {
   label: string;
   path?: string;
@@ -55,6 +74,9 @@ export type Project = {
   git: GitStatus;
   todo: TodoSummary;
   readme: ReadmeSummary;
+  license: LicenseSummary;
+  vscodeExtension?: VscodeExtensionSummary;
+  service?: ServiceSummary;
 };
 
 export type Suggestion = {

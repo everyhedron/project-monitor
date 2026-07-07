@@ -6,7 +6,7 @@ import { addProjects, removeProjects, updateStartupOptions } from "./config";
 import { discoverWorkspace, type InstalledExtensionInfo } from "./discovery";
 import { logError } from "./log";
 import type { ProjectMonitorConfig } from "./config";
-import type { GitStatus, Project, ReadmeSummary, Suggestion, TodoSummary } from "./types";
+import type { GitStatus, LicenseSummary, Project, ReadmeSummary, ServiceSummary, Suggestion, TodoSummary } from "./types";
 
 export const dashboardViewType = "projectMonitor.dashboard";
 
@@ -17,6 +17,7 @@ type DashboardMessage = {
   requestId?: string;
   setting?: "openOnStartup" | "pinOnStartup";
   tab?: string;
+  text?: string;
   url?: string;
   value?: boolean;
 };
@@ -27,7 +28,6 @@ export class Dashboard {
   private activeTab = "projects-view";
   private timer: NodeJS.Timeout | undefined;
   private lastProjects: Project[] = [];
-  private readonly terminals = new Map<string, vscode.Terminal>();
   private readonly statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 90);
 
   constructor(
@@ -35,16 +35,7 @@ export class Dashboard {
     private getConfig: () => ProjectMonitorConfig
   ) {
     this.statusBarItem.command = "projectMonitor.openDashboard";
-    this.context.subscriptions.push(
-      this.statusBarItem,
-      vscode.window.onDidCloseTerminal((terminal) => {
-        for (const [key, trackedTerminal] of this.terminals) {
-          if (trackedTerminal === terminal) {
-            this.terminals.delete(key);
-          }
-        }
-      })
-    );
+    this.context.subscriptions.push(this.statusBarItem);
   }
 
   hasPanel(): boolean {
@@ -246,6 +237,12 @@ export class Dashboard {
         return;
       }
 
+      if (message.command === "copyText" && message.text) {
+        await vscode.env.clipboard.writeText(message.text);
+        void vscode.window.showInformationMessage("Copied to the clipboard.");
+        return;
+      }
+
       if (message.command === "reloadWindow") {
         await vscode.commands.executeCommand("workbench.action.reloadWindow");
         return;
@@ -306,8 +303,8 @@ export class Dashboard {
   }
 
   private openProjectTerminal(projectPath: string): void {
-    const key = `terminal:${projectPath}`;
-    const existingTerminal = this.terminals.get(key);
+    const terminalName = toProperProjectName(path.basename(projectPath));
+    const existingTerminal = vscode.window.terminals.find((terminal) => terminal.name === terminalName);
     if (existingTerminal) {
       existingTerminal.show();
       return;
@@ -315,30 +312,28 @@ export class Dashboard {
 
     const terminal = vscode.window.createTerminal({
       cwd: projectPath,
-      name: toProperProjectName(path.basename(projectPath))
+      name: terminalName
     });
-    this.terminals.set(key, terminal);
     terminal.show();
   }
 
   private async openProjectAgent(projectPath: string): Promise<void> {
     const homeDir = os.homedir();
     const projectName = toProperProjectName(path.basename(projectPath));
-    const session = await findCodexSession(homeDir, projectName);
+    const terminalName = `${projectName} | Codex`;
     await vscode.env.clipboard.writeText(projectPath);
 
-    const key = `agent:${projectPath}`;
-    const existingTerminal = this.terminals.get(key);
+    const existingTerminal = vscode.window.terminals.find((terminal) => terminal.name === terminalName);
     if (existingTerminal) {
       existingTerminal.show();
       return;
     }
 
+    const session = await findCodexSession(homeDir, projectName);
     const terminal = vscode.window.createTerminal({
       cwd: homeDir,
-      name: `${projectName} | Codex`
+      name: terminalName
     });
-    this.terminals.set(key, terminal);
     terminal.show();
     terminal.sendText(session ? `codex resume ${session.id}` : "codex");
   }
@@ -398,7 +393,8 @@ export class Dashboard {
             publishedRoutes: [],
             git: emptyGitStatus(),
             todo: emptyTodoSummary(),
-            readme: emptyReadmeSummary()
+            readme: emptyReadmeSummary(),
+            license: emptyLicenseSummary()
           } satisfies Project));
 
     return [
@@ -799,6 +795,10 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
       color: var(--muted);
     }
 
+    .attention {
+      color: var(--vscode-errorForeground, var(--git-bad));
+    }
+
     .inline-link {
       color: var(--vscode-textLink-foreground);
       cursor: pointer;
@@ -1069,9 +1069,11 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
               <th>Status</th>
               <th>Kind</th>
               <th>Ports</th>
+              <th>Service</th>
               <th>Git</th>
               <th>TODO</th>
               <th>README</th>
+              <th>License</th>
               <th>Path</th>
             </tr>
           </thead>
@@ -1290,6 +1292,7 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
         path: commandElement.dataset.path,
         paths: selected,
         requestId,
+        text: commandElement.dataset.text,
         url: commandElement.dataset.url
       });
     });
@@ -1340,8 +1343,6 @@ function countProjectStatuses(projects: Project[]): Record<Project["status"], nu
 }
 
 function renderProjectCard(project: Project): string {
-  const commands = project.suggestedCommands.length > 0 ? project.suggestedCommands.join(", ") : "No suggestion yet";
-
   return `<article class="card" data-project-path="${escapeAttr(project.path)}" data-parent-path="${escapeAttr(path.dirname(project.path))}">
     <div class="card-top">
       <div class="card-heading">
@@ -1362,20 +1363,10 @@ function renderProjectCard(project: Project): string {
       <dd>${renderTodoSummary(project.todo, project.path)}</dd>
       <dt>README</dt>
       <dd>${renderReadmeSummary(project.readme)}</dd>
-      ${
-        project.kind === "static"
-          ? ""
-          : `<dt>Ports</dt><dd>${
-              project.ports.length > 0
-                ? project.ports
-                    .map((port) => {
-                      const url = `http://localhost:${port}`;
-                      return `<a class="inline-link" href="${escapeAttr(url)}" data-command="openUrl" data-url="${escapeAttr(url)}">${port}</a>`;
-                    })
-                    .join(", ")
-                : "None detected"
-            }</dd>`
-      }
+      <dt>License</dt>
+      <dd>${renderLicenseSummary(project.license)}</dd>
+      ${project.kind === "vsce" ? `<dt>Version</dt><dd>${renderVscodeExtensionVersion(project)}</dd>` : `<dt>Ports</dt><dd>${renderPorts(project)}</dd>`}
+      ${project.kind === "vsce" || project.kind === "static" ? "" : `<dt>Service</dt><dd>${renderServiceSummary(project.service)}</dd>`}
       <dt>Evidence</dt>
       <dd>${project.evidence
         .map((item) =>
@@ -1384,11 +1375,6 @@ function renderProjectCard(project: Project): string {
             : escapeHtml(item.label)
         )
         .join(", ")}</dd>
-      ${
-        project.status === "running" || project.status === "serving" || project.status === "installed" || project.status === "stale"
-          ? ""
-          : `<dt>Suggest</dt><dd>${escapeHtml(commands)}</dd>`
-      }
       ${
         project.publishedRoutes.length > 0
           ? `<dt>Published</dt><dd>${project.publishedRoutes
@@ -1404,24 +1390,16 @@ function renderProjectCard(project: Project): string {
 }
 
 function renderProjectRow(project: Project): string {
-  const ports =
-    project.ports.length > 0
-      ? project.ports
-          .map((port) => {
-            const url = `http://localhost:${port}`;
-            return `<a class="inline-link" href="${escapeAttr(url)}" data-command="openUrl" data-url="${escapeAttr(url)}">${port}</a>`;
-          })
-          .join(", ")
-      : "None";
-
   return `<tr data-project-path="${escapeAttr(project.path)}" data-parent-path="${escapeAttr(path.dirname(project.path))}">
     <td><div class="table-project-title">${renderProjectTitle(project, "div")}${renderProjectActions(project)}</div></td>
     <td>${renderStatusBadge(project.status)}</td>
     <td>${escapeHtml(project.kind)}</td>
-    <td>${ports}</td>
+    <td>${project.kind === "vsce" ? renderVscodeExtensionVersion(project) : renderPorts(project)}</td>
+    <td>${project.kind === "vsce" || project.kind === "static" ? `<span class="muted-status">n/a</span>` : renderServiceSummary(project.service)}</td>
     <td>${renderGitSummary(project.git)}</td>
     <td>${renderTodoSummary(project.todo, project.path)}</td>
     <td>${renderReadmeSummary(project.readme)}</td>
+    <td>${renderLicenseSummary(project.license)}</td>
     <td><div class="path"><button class="path-button" data-command="openFolder" data-path="${escapeAttr(project.path)}">${escapeHtml(project.path)}</button></div></td>
   </tr>`;
 }
@@ -1446,12 +1424,60 @@ function renderProjectTitle(project: Project, tagName: "h2" | "div"): string {
 
 function renderReadmeSummary(readme: ReadmeSummary): string {
   if (!readme.exists || !readme.path) {
-    return `<span class="muted-status">None</span>`;
+    return `<span class="attention">No README</span>`;
   }
 
   const description = readme.description || readme.section || "README";
   const section = readme.section || description;
-  return `<button class="readme-link" data-command="openFile" data-path="${escapeAttr(readme.path)}" title="${escapeAttr(section)}">${escapeHtml(truncateText(description, 150))}</button>`;
+  return `<button class="readme-link${readme.description ? "" : " attention"}" data-command="openFile" data-path="${escapeAttr(readme.path)}" title="${escapeAttr(section)}">${escapeHtml(truncateText(description, 150))}</button>`;
+}
+
+function renderLicenseSummary(license: LicenseSummary): string {
+  if (!license.exists || !license.path) {
+    return `<span class="attention">No license</span>`;
+  }
+  return `<button class="readme-link" data-command="openFile" data-path="${escapeAttr(license.path)}" title="${escapeAttr(license.path)}">${escapeHtml(license.label || "LICENSE")}</button>`;
+}
+
+function renderPorts(project: Project): string {
+  if (project.ports.length > 0) {
+    return project.ports
+      .map((port) => {
+        const url = `http://localhost:${port}`;
+        return `<a class="inline-link" href="${escapeAttr(url)}" data-command="openUrl" data-url="${escapeAttr(url)}">${port}</a>`;
+      })
+      .join(", ");
+  }
+
+  if (projectNeedsServing(project)) {
+    return `<span class="attention">No ports</span>`;
+  }
+
+  return `<span class="muted-status">None</span>`;
+}
+
+function renderVscodeExtensionVersion(project: Project): string {
+  const extension = project.vscodeExtension;
+  const installed = extension?.installedVersion ?? "not installed";
+  const latest = extension?.latestVersion ?? "unknown";
+  const isCurrent = extension?.installedVersion !== undefined && extension.installedVersion === extension.latestVersion;
+  return `<span class="${isCurrent ? "" : "attention"}">${escapeHtml(installed)} / ${escapeHtml(latest)}</span>`;
+}
+
+function renderServiceSummary(service: ServiceSummary | undefined): string {
+  if (!service) {
+    return `<span class="muted-status">None</span>`;
+  }
+
+  if (service.projectSymlinkPath) {
+    return `<button class="readme-link" data-command="openFile" data-path="${escapeAttr(service.projectSymlinkPath)}" title="${escapeAttr(service.systemPath ?? service.projectSymlinkPath)}">${escapeHtml(service.name ?? path.basename(service.projectSymlinkPath))}</button>`;
+  }
+
+  if (service.copyCommand) {
+    return `<button class="readme-link attention" data-command="copyText" data-text="${escapeAttr(service.copyCommand)}" title="${escapeAttr(service.copyCommand)}">${escapeHtml(service.name ?? "Missing service symlink")}</button>`;
+  }
+
+  return `<span class="muted-status">${escapeHtml(service.name ?? "Service")}</span>`;
 }
 
 function renderStatusBadge(status: Project["status"]): string {
@@ -1529,6 +1555,16 @@ function emptyReadmeSummary(): ReadmeSummary {
   return {
     exists: false
   };
+}
+
+function emptyLicenseSummary(): LicenseSummary {
+  return {
+    exists: false
+  };
+}
+
+function projectNeedsServing(project: Project): boolean {
+  return project.kind !== "vsce" && project.kind !== "static" && project.kind !== "unknown";
 }
 
 type CodexSessionIndexEntry = {

@@ -6,7 +6,19 @@ import { promisify } from "util";
 import { listListeningProcesses } from "./processes";
 import { joinUrlPath, readNginxRoutes, type NginxRoute } from "./nginx";
 import { logWarningOnce } from "./log";
-import type { Evidence, GitStatus, ListeningProcess, Project, ProjectKind, ReadmeSummary, Suggestion, TodoSummary } from "./types";
+import type {
+  Evidence,
+  GitStatus,
+  LicenseSummary,
+  ListeningProcess,
+  Project,
+  ProjectKind,
+  ReadmeSummary,
+  ServiceSummary,
+  Suggestion,
+  TodoSummary,
+  VscodeExtensionSummary
+} from "./types";
 
 const execFileAsync = promisify(execFile);
 
@@ -33,6 +45,11 @@ export type InstalledExtensionInfo = {
   version?: string;
 };
 
+type SystemdServiceRef = {
+  name: string;
+  path: string;
+};
+
 export async function discoverWorkspace(
   projectPaths: string[],
   installedExtensions = new Map<string, InstalledExtensionInfo>(),
@@ -40,9 +57,16 @@ export async function discoverWorkspace(
 ): Promise<DiscoveryResult> {
   const canonicalPaths = [...new Set(await Promise.all(projectPaths.map(canonicalize)))];
   const trackedSet = new Set(canonicalPaths);
-  const listeners = await listListeningProcesses();
+  const [listeners, serviceRefsByProject] = await Promise.all([
+    listListeningProcesses(),
+    readSystemdServiceRefs(canonicalPaths)
+  ]);
 
-  const projects = await Promise.all(canonicalPaths.map((projectPath) => buildProject(projectPath, listeners, installedExtensions)));
+  const projects = await Promise.all(
+    canonicalPaths.map((projectPath) =>
+      buildProject(projectPath, listeners, installedExtensions, serviceRefsByProject.get(projectPath))
+    )
+  );
   projects.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
 
   const nginxRoutes = await readNginxRoutes();
@@ -61,13 +85,16 @@ export async function discoverWorkspace(
 async function buildProject(
   projectPath: string,
   listeners: ListeningProcess[],
-  installedExtensions: Map<string, InstalledExtensionInfo>
+  installedExtensions: Map<string, InstalledExtensionInfo>,
+  systemdServiceRef: SystemdServiceRef | undefined
 ): Promise<Project> {
-  const [detection, git, todo, readme] = await Promise.all([
+  const [detection, git, todo, readme, license, service] = await Promise.all([
     detectProject(projectPath, installedExtensions),
     readGitStatus(projectPath),
     readTodoSummary(projectPath),
-    readReadmeSummary(projectPath)
+    readReadmeSummary(projectPath),
+    readLicenseSummary(projectPath),
+    readProjectServiceSummary(projectPath, systemdServiceRef)
   ]);
   const matchedListeners = listeners.filter((listener) => listener.cwd !== undefined && isSameOrInside(listener.cwd, projectPath));
   const ports = [...new Set(matchedListeners.flatMap((listener) => listener.ports))].sort((a, b) => a - b);
@@ -85,7 +112,10 @@ async function buildProject(
     publishedRoutes: [],
     git,
     todo,
-    readme
+    readme,
+    license,
+    vscodeExtension: detection.vscodeExtension,
+    service
   };
 }
 
@@ -139,6 +169,127 @@ async function readReadmeSummary(projectPath: string): Promise<ReadmeSummary> {
     return {
       exists: false
     };
+  }
+}
+
+async function readLicenseSummary(projectPath: string): Promise<LicenseSummary> {
+  const names = ["LICENSE", "LICENSE.md", "LICENSE.txt", "LICENCE", "LICENCE.md", "LICENCE.txt"];
+  for (const name of names) {
+    const licensePath = path.join(projectPath, name);
+    try {
+      const raw = await fs.readFile(licensePath, "utf8");
+      const firstLine = raw
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find((line) => line.length > 0);
+      return {
+        exists: true,
+        path: licensePath,
+        label: firstLine ? stripMarkdownInline(firstLine) : name
+      };
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        logWarningOnce(`license:${licensePath}`, `Unable to read license file at ${licensePath}.`, error);
+      }
+    }
+  }
+
+  return { exists: false };
+}
+
+async function readSystemdServiceRefs(projectPaths: string[]): Promise<Map<string, SystemdServiceRef>> {
+  const serviceDir = "/etc/systemd/system";
+  const refs = new Map<string, SystemdServiceRef>();
+  let entries: string[];
+  try {
+    entries = await fs.readdir(serviceDir);
+  } catch (error) {
+    logWarningOnce("systemd:services", `Unable to read systemd services from ${serviceDir}.`, error);
+    return refs;
+  }
+
+  const serviceFiles = entries.filter((entry) => entry.endsWith(".service"));
+  await Promise.all(
+    serviceFiles.map(async (entry) => {
+      const servicePath = path.join(serviceDir, entry);
+      let raw: string;
+      try {
+        raw = await fs.readFile(servicePath, "utf8");
+      } catch (error) {
+        logWarningOnce(`systemd:service:${servicePath}`, `Unable to read systemd service ${servicePath}.`, error);
+        return;
+      }
+
+      for (const projectPath of projectPaths) {
+        if (!refs.has(projectPath) && raw.includes(projectPath)) {
+          refs.set(projectPath, { name: entry, path: servicePath });
+        }
+      }
+    })
+  );
+
+  return refs;
+}
+
+async function readProjectServiceSummary(
+  projectPath: string,
+  systemdServiceRef: SystemdServiceRef | undefined
+): Promise<ServiceSummary | undefined> {
+  const serviceSymlink = await findProjectServiceSymlink(projectPath, systemdServiceRef?.name);
+  if (serviceSymlink) {
+    return {
+      name: path.basename(serviceSymlink),
+      projectSymlinkPath: serviceSymlink,
+      systemPath: await safeRealpath(serviceSymlink)
+    };
+  }
+
+  if (!systemdServiceRef) {
+    return undefined;
+  }
+
+  return {
+    name: systemdServiceRef.name,
+    systemPath: systemdServiceRef.path,
+    copyCommand: `ln -s ${shellQuote(systemdServiceRef.path)} ${shellQuote(path.join(projectPath, systemdServiceRef.name))}`
+  };
+}
+
+async function findProjectServiceSymlink(projectPath: string, preferredName: string | undefined): Promise<string | undefined> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(projectPath);
+  } catch (error) {
+    logWarningOnce(`service-symlink:${projectPath}`, `Unable to scan service symlinks in ${projectPath}.`, error);
+    return undefined;
+  }
+
+  const serviceNames = entries.filter((entry) => entry.endsWith(".service"));
+  const orderedNames =
+    preferredName && serviceNames.includes(preferredName)
+      ? [preferredName, ...serviceNames.filter((entry) => entry !== preferredName)]
+      : serviceNames;
+
+  for (const entry of orderedNames) {
+    const candidate = path.join(projectPath, entry);
+    try {
+      const stats = await fs.lstat(candidate);
+      if (stats.isSymbolicLink()) {
+        return candidate;
+      }
+    } catch (error) {
+      logWarningOnce(`service-symlink:${candidate}`, `Unable to inspect service symlink ${candidate}.`, error);
+    }
+  }
+
+  return undefined;
+}
+
+async function safeRealpath(targetPath: string): Promise<string | undefined> {
+  try {
+    return await fs.realpath(targetPath);
+  } catch {
+    return undefined;
   }
 }
 
@@ -450,6 +601,7 @@ async function detectProject(projectPath: string, installedExtensions: Map<strin
   suggestedCommands: string[];
   isInstalledVscodeExtension: boolean;
   isStaleVscodeExtension: boolean;
+  vscodeExtension?: VscodeExtensionSummary;
 }> {
   const evidence: Evidence[] = [];
   const suggestedCommands: string[] = [];
@@ -519,7 +671,14 @@ async function detectProject(projectPath: string, installedExtensions: Map<strin
       evidence,
       suggestedCommands: suggestedCommands.length > 0 ? suggestedCommands : ["npm install", "npm run dev"],
       isInstalledVscodeExtension,
-      isStaleVscodeExtension
+      isStaleVscodeExtension,
+      vscodeExtension: packageInfo.isVscodeExtension
+        ? {
+            id: packageInfo.extensionId,
+            installedVersion: installedExtension?.version,
+            latestVersion: packageInfo.version
+          }
+        : undefined
     };
   }
 
@@ -617,4 +776,8 @@ function isSameOrInside(childPath: string, parentPath: string): boolean {
 
 function isMissingPathError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
