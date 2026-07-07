@@ -6,7 +6,7 @@
 - [x] for this part "0 selected. 23 projects tracked, 4 running, 11 serving, 3 installed, 0 stale. " just say 23 tracked, no "project". and for the specific category of status, make them a hover tooltip when one hovers on the 23 tracked. also include how many stopped, basically all available status should each be on one line. 
 - [x] add to the status bar a quick section similar to each in /home/django/everyhedron/server-monitor. we want to show just how many are good (not stopped or stale) so numgood/totalprojectnum, when hovering, it will show the same as the one we implemented on page which is for each status category. when clicked on, it will open the project monitor page
 - [x] if we are opening agent in the terminal, check vscode terminal if it already exists, if so we simply focus it. same with open terminal.
-- [ ] this is the git remote for this project "git@github.com:everyhedron/project-monitor.git" there is a MIT License on the remote. configure it. tage all changes, commit, and push
+- [x] this is the git remote for this project "git@github.com:everyhedron/project-monitor.git" there is a MIT License on the remote. configure it. tage all changes, commit, and push
 - [x] your thought here "• Patch is in. I changed “unpushed” to “sync needed” and “unsynced” to “sync unknown”; kept “behind”
   because that is a different sync direction signal, but it still belongs to sync terminology. Next I’m
   marking the TODOs complete and compiling." confused me a little. please write below this item, the current possible git statuses and their logic in whether they can coexist, what git command proves each. 
