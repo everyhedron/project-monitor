@@ -266,19 +266,7 @@ function buildGitLabel(hasRemote: boolean, hasUncommittedChanges: boolean, ahead
   if (!hasRemote) {
     return hasUncommittedChanges ? "Local changes" : "Local repo";
   }
-  if (hasUncommittedChanges) {
-    return "Uncommitted changes";
-  }
-  if (ahead > 0 && behind > 0) {
-    return `Diverged +${ahead}/-${behind}`;
-  }
-  if (ahead > 0) {
-    return `${ahead} unpushed`;
-  }
-  if (behind > 0) {
-    return `${behind} behind`;
-  }
-  return "Synced";
+  return hasUncommittedChanges || ahead > 0 || behind > 0 ? "Unsynced" : "Synced";
 }
 
 async function findSiblingSuggestions(canonicalPaths: string[], trackedSet: Set<string>): Promise<Suggestion[]> {

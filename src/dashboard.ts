@@ -1467,20 +1467,16 @@ function renderGitSummary(git: GitStatus): string {
     segments.push(gitSegment("unstaged", false));
   } else if (git.hasStagedChanges) {
     segments.push(gitSegment("uncommitted", false));
-  } else {
+  } else if (!git.hasRemote) {
     segments.push(gitSegment("committed", true));
   }
 
   if (!git.hasRemote) {
     segments.push(gitSegment("no remote", false));
-  } else if (git.hasUnpushedCommits) {
-    segments.push(gitSegment("sync needed", false));
-  } else if (git.hasUnpulledCommits) {
-    segments.push(gitSegment("behind", false));
   } else if (git.synced) {
     segments.push(gitSegment("synced", true));
   } else {
-    segments.push(gitSegment("sync unknown", false));
+    segments.push(gitSegment("unsynced", false));
   }
 
   return `<div class="git-summary">${segments.join("")}</div>`;

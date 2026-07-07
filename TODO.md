@@ -14,10 +14,9 @@
   - `No git`: no `.git` metadata or not inside a git work tree. Proven by `.git` lookup plus `git -C <project> rev-parse --is-inside-work-tree`.
   - `unstaged`: at least one porcelain line has an unstaged marker in column 2, or starts with `??`. This wins over `uncommitted`, so they do not display together.
   - `uncommitted`: at least one porcelain line has a staged marker in column 1, and no unstaged/untracked changes. This means all detected changes are staged.
-  - `committed`: no porcelain change lines. This can coexist with remote sync states because it only describes the local working tree.
+  - `committed`: no porcelain change lines and no remote. If a remote exists, a clean tree is represented by `synced` or `unsynced` instead.
   - Second segment, remote sync state, comes from `git -C <project> remote`, `git -C <project> rev-parse --abbrev-ref --symbolic-full-name @{u}`, and the ahead/behind markers in the same `git status --porcelain=v1 --branch --untracked-files=no` branch header.
   - `no remote`: no remote and no upstream. This excludes all sync statuses.
-  - `sync needed`: branch header has `ahead N`, meaning local commits have not been pushed. This currently wins over `behind`, so a diverged branch displays `sync needed`.
-  - `behind`: branch header has `behind N` and no ahead count, meaning remote commits have not been pulled.
+  - `unsynced`: remote/upstream exists, but local changes, ahead commits, behind commits, or an otherwise unproven sync state mean the repo is not proven current.
   - `synced`: remote/upstream exists, no uncommitted changes, and ahead/behind are both zero.
-  - `sync unknown`: remote/upstream exists but none of the above sync states could be proven from the collected command output.
+- [x] whether it is sync needed, behind, or sync unknown, all should say "unsynced". committed can only exist when there is "no remote", otherwise it automatically walks up to be unsynced or synced.
