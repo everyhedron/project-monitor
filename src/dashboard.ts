@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
-import { addProjects, removeProjects, updateStartupOptions } from "./config";
+import { addProjects, removeProjects } from "./config";
 import { discoverWorkspace, type InstalledExtensionInfo } from "./discovery";
 import { logError } from "./log";
 import type { ProjectMonitorConfig } from "./config";
@@ -15,7 +15,6 @@ type DashboardMessage = {
   path?: string;
   paths?: string[];
   requestId?: string;
-  setting?: "openOnStartup" | "pinOnStartup";
   tab?: string;
   text?: string;
   url?: string;
@@ -43,12 +42,9 @@ export class Dashboard {
     return this.panel !== undefined;
   }
 
-  open(pin = false): void {
+  open(): void {
     if (this.panel) {
       this.panel.reveal(vscode.ViewColumn.One);
-      if (pin) {
-        void this.pinPanel();
-      }
       void this.refresh();
       return;
     }
@@ -65,9 +61,6 @@ export class Dashboard {
     );
 
     this.attachPanel(panel);
-    if (pin) {
-      void this.pinPanel();
-    }
   }
 
   restore(panel: vscode.WebviewPanel): void {
@@ -198,7 +191,7 @@ export class Dashboard {
     if (resetTimer || this.nextRefreshAt <= Date.now()) {
       this.nextRefreshAt = Date.now() + config.refreshIntervalMs;
     }
-    this.panel.webview.html = renderDashboard(projects, suggestions, config, this.nextRefreshAt);
+    this.panel.webview.html = renderDashboard(projects, suggestions, this.nextRefreshAt);
     this.startTimer();
   }
 
@@ -273,11 +266,6 @@ export class Dashboard {
 
       if ((message.command === "copyContext" || message.command === "attachContext") && message.paths && message.paths.length > 0) {
         await this.copyProjectsContext(message.paths);
-        return;
-      }
-
-      if (message.command === "updateStartupSetting" && message.setting) {
-        await updateStartupOptions({ [message.setting]: message.value === true });
         return;
       }
 
@@ -376,11 +364,6 @@ export class Dashboard {
     terminal.sendText("claude");
   }
 
-  private async pinPanel(): Promise<void> {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    await vscode.commands.executeCommand("workbench.action.pinEditor");
-  }
-
   private async confirmAndRemoveProjects(paths: string[]): Promise<void> {
     const count = new Set(paths).size;
     const label = count === 1 ? "Remove Project" : "Remove Projects";
@@ -448,7 +431,7 @@ export class Dashboard {
   }
 }
 
-function renderDashboard(projects: Project[], suggestions: Suggestion[], config: ProjectMonitorConfig, nextRefreshAt: number): string {
+function renderDashboard(projects: Project[], suggestions: Suggestion[], nextRefreshAt: number): string {
   const statusTooltip = createStatusTooltip(projects);
   const parentFolders = [...new Set(projects.map((project) => path.dirname(project.path)))].sort((a, b) =>
     a.localeCompare(b, undefined, { sensitivity: "base" })
@@ -520,19 +503,6 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
       flex-wrap: wrap;
       gap: 8px;
       justify-content: flex-end;
-    }
-
-    .checkbox-control {
-      align-items: center;
-      color: var(--fg);
-      display: inline-flex;
-      gap: 6px;
-      min-height: 30px;
-      white-space: nowrap;
-    }
-
-    .checkbox-control input {
-      margin: 0;
     }
 
     h1 {
@@ -1205,8 +1175,6 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
       </div>
       <div class="header-actions">
         <input type="search" id="project-search" class="search-input" placeholder="Search projects..." aria-label="Search projects by name">
-        <label class="checkbox-control"><input type="checkbox" data-setting="openOnStartup" ${config.openOnStartup ? "checked" : ""}> Open on startup</label>
-        <label class="checkbox-control"><input type="checkbox" data-setting="pinOnStartup" ${config.pinOnStartup ? "checked" : ""}> Pin on startup</label>
         <button data-command="refresh">Refresh</button>
         <button class="secondary" data-command="copyContext" disabled>Copy Context</button>
         <button class="danger" data-command="removeSelected" disabled>Remove Selected</button>
@@ -1714,14 +1682,6 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
     document.addEventListener("change", (event) => {
       if (event.target.id === "parent-filter") {
         applyFilters();
-      }
-
-      if (event.target.dataset?.setting) {
-        vscode.postMessage({
-          command: "updateStartupSetting",
-          setting: event.target.dataset.setting,
-          value: event.target.checked
-        });
       }
     });
   </script>

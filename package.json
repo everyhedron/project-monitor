@@ -2,7 +2,7 @@
   "name": "project-monitor",
   "displayName": "Project Monitor",
   "description": "VS Code dashboard for local project folders and their serving status.",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "publisher": "everyhedron",
   "license": "MIT",
   "engines": {
@@ -12,7 +12,6 @@
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished",
     "onWebviewPanel:projectMonitor.dashboard",
     "onCommand:projectMonitor.openDashboard",
     "onCommand:projectMonitor.refresh"
@@ -51,16 +50,6 @@
           "default": 30000,
           "minimum": 10000,
           "description": "Dashboard auto-refresh interval in milliseconds."
-        },
-        "projectMonitor.openOnStartup": {
-          "type": "boolean",
-          "default": false,
-          "description": "Open the Project Monitor dashboard when VS Code finishes starting up."
-        },
-        "projectMonitor.pinOnStartup": {
-          "type": "boolean",
-          "default": false,
-          "description": "Pin the Project Monitor dashboard tab when it opens on VS Code startup."
         }
       }
     }

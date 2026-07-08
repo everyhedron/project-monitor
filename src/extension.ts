@@ -27,22 +27,8 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     })
   );
-
-  if (config.openOnStartup) {
-    setTimeout(() => {
-      if (!dashboard.hasPanel() && !hasExistingDashboardTab()) {
-        dashboard.open(config.pinOnStartup);
-      }
-    }, 1000);
-  }
 }
 
 export function deactivate(): void {
   logInfo("Project Monitor extension deactivated.");
-}
-
-function hasExistingDashboardTab(): boolean {
-  return vscode.window.tabGroups.all
-    .flatMap((group) => group.tabs)
-    .some((tab) => tab.input instanceof vscode.TabInputWebview && tab.input.viewType.includes(dashboardViewType));
 }

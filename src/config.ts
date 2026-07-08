@@ -5,17 +5,13 @@ import { logWarningOnce } from "./log";
 export type ProjectMonitorConfig = {
   projects: string[];
   refreshIntervalMs: number;
-  openOnStartup: boolean;
-  pinOnStartup: boolean;
 };
 
 export function readConfig(): ProjectMonitorConfig {
   const config = vscode.workspace.getConfiguration("projectMonitor");
   return {
     projects: uniqueStrings(config.get<string[]>("projects", [])).map(normalizePath),
-    refreshIntervalMs: Math.max(10000, config.get<number>("refreshIntervalMs", 30000)),
-    openOnStartup: config.get<boolean>("openOnStartup", false),
-    pinOnStartup: config.get<boolean>("pinOnStartup", false)
+    refreshIntervalMs: Math.max(10000, config.get<number>("refreshIntervalMs", 30000))
   };
 }
 
@@ -36,16 +32,6 @@ export async function removeProjects(targetPaths: string[]): Promise<void> {
   const canonicalTargets = new Set((await Promise.all(targetPaths.map(canonicalize))).map(normalizePath));
   const remaining = readConfig().projects.filter((path) => !canonicalTargets.has(path));
   await writeProjects(remaining);
-}
-
-export async function updateStartupOptions(options: Partial<Pick<ProjectMonitorConfig, "openOnStartup" | "pinOnStartup">>): Promise<void> {
-  const config = vscode.workspace.getConfiguration("projectMonitor");
-  if (options.openOnStartup !== undefined) {
-    await config.update("openOnStartup", options.openOnStartup, vscode.ConfigurationTarget.Global);
-  }
-  if (options.pinOnStartup !== undefined) {
-    await config.update("pinOnStartup", options.pinOnStartup, vscode.ConfigurationTarget.Global);
-  }
 }
 
 async function writeProjects(projects: string[]): Promise<void> {
