@@ -39,6 +39,7 @@ export type LicenseSummary = {
   exists: boolean;
   path?: string;
   label?: string;
+  hasContent?: boolean;
 };
 
 export type VscodeExtensionSummary = {

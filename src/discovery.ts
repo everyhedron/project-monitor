@@ -185,7 +185,8 @@ async function readLicenseSummary(projectPath: string): Promise<LicenseSummary> 
       return {
         exists: true,
         path: licensePath,
-        label: firstLine ? stripMarkdownInline(firstLine) : name
+        label: firstLine ? stripMarkdownInline(firstLine) : name,
+        hasContent: firstLine !== undefined
       };
     } catch (error) {
       if (!isMissingPathError(error)) {
@@ -346,7 +347,7 @@ async function readGitStatus(projectPath: string): Promise<GitStatus> {
   }
 
   const [statusOutput, remoteOutput, upstreamOutput] = await Promise.all([
-    runGit(projectPath, ["status", "--porcelain=v1", "--branch", "--untracked-files=no"]),
+    runGit(projectPath, ["status", "--porcelain=v1", "--branch", "--untracked-files=normal"]),
     runGit(projectPath, ["remote"]),
     runGit(projectPath, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], false)
   ]);

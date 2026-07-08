@@ -58,7 +58,7 @@ export class Dashboard {
       "Project Monitor",
       vscode.ViewColumn.One,
       {
-        enableFindWidget: true,
+        enableFindWidget: false,
         enableScripts: true,
         retainContextWhenHidden: true
       }
@@ -106,7 +106,7 @@ export class Dashboard {
           return;
         }
         if (panel.visible) {
-          void this.refresh();
+          void this.refresh(false);
         }
       },
       undefined,
@@ -250,6 +250,11 @@ export class Dashboard {
         return;
       }
 
+      if (message.command === "openClaudeAgent" && message.path) {
+        await this.openProjectClaudeAgent(message.path);
+        return;
+      }
+
       if (message.command === "copyText" && message.text) {
         await vscode.env.clipboard.writeText(message.text);
         void vscode.window.showInformationMessage("Copied to the clipboard.");
@@ -349,6 +354,26 @@ export class Dashboard {
     });
     terminal.show();
     terminal.sendText(session ? `codex resume ${session.id}` : "codex");
+  }
+
+  private async openProjectClaudeAgent(projectPath: string): Promise<void> {
+    const homeDir = os.homedir();
+    const projectName = toProperProjectName(path.basename(projectPath));
+    const terminalName = `${projectName} | Claude`;
+    await vscode.env.clipboard.writeText(projectPath);
+
+    const existingTerminal = vscode.window.terminals.find((terminal) => terminal.name === terminalName);
+    if (existingTerminal) {
+      existingTerminal.show();
+      return;
+    }
+
+    const terminal = vscode.window.createTerminal({
+      cwd: homeDir,
+      name: terminalName
+    });
+    terminal.show();
+    terminal.sendText("claude");
   }
 
   private async pinPanel(): Promise<void> {
@@ -563,6 +588,125 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
       min-height: 30px;
       max-width: min(560px, calc(100vw - 80px));
       padding: 4px 28px 4px 9px;
+    }
+
+    .search-input {
+      appearance: none;
+      background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border, var(--border));
+      border-radius: 4px;
+      color: var(--vscode-input-foreground);
+      font: inherit;
+      min-height: 30px;
+      min-width: 180px;
+      padding: 4px 9px;
+    }
+
+    .find-widget {
+      align-items: center;
+      background: var(--vscode-editorWidget-background, var(--card));
+      border: 1px solid var(--vscode-editorWidget-border, var(--border));
+      border-radius: 4px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+      color: var(--vscode-editorWidget-foreground, var(--fg));
+      display: flex;
+      gap: 2px;
+      padding: 4px;
+      position: fixed;
+      right: 24px;
+      top: 12px;
+      z-index: 50;
+    }
+
+    .find-widget.hidden {
+      display: none;
+    }
+
+    .find-part {
+      align-items: center;
+      display: flex;
+      gap: 2px;
+    }
+
+    .find-input {
+      appearance: none;
+      background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border, var(--border));
+      border-radius: 3px;
+      color: var(--vscode-input-foreground);
+      font: inherit;
+      height: 26px;
+      padding: 2px 8px;
+      width: 200px;
+    }
+
+    .find-toggles {
+      display: flex;
+      gap: 1px;
+      margin-left: -28px;
+    }
+
+    .find-toggle {
+      appearance: none;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 3px;
+      color: var(--muted);
+      cursor: pointer;
+      font: inherit;
+      font-size: 11px;
+      font-weight: 600;
+      height: 20px;
+      min-height: 0;
+      padding: 0 4px;
+    }
+
+    .find-toggle.active {
+      background: var(--vscode-inputOption-activeBackground, color-mix(in srgb, var(--button) 35%, transparent));
+      border-color: var(--vscode-inputOption-activeBorder, var(--button));
+      color: var(--vscode-inputOption-activeForeground, var(--fg));
+    }
+
+    .find-count {
+      color: var(--muted);
+      font-size: 12px;
+      min-width: 72px;
+      padding: 0 6px;
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    .find-nav {
+      appearance: none;
+      background: transparent;
+      border: 0;
+      border-radius: 3px;
+      color: var(--fg);
+      cursor: pointer;
+      font: inherit;
+      height: 26px;
+      min-height: 0;
+      padding: 0 6px;
+    }
+
+    .find-nav:hover,
+    .find-toggle:hover {
+      background: var(--vscode-toolbar-hoverBackground, color-mix(in srgb, var(--fg) 12%, transparent));
+    }
+
+    .find-nav:disabled {
+      cursor: default;
+      opacity: 0.4;
+    }
+
+    mark.find-match {
+      background: var(--vscode-editor-findMatchHighlightBackground, #ffd54a66);
+      color: inherit;
+      border-radius: 2px;
+    }
+
+    mark.find-match.current {
+      background: var(--vscode-editor-findMatchBackground, #ff9632aa);
     }
 
     .tab {
@@ -805,8 +949,15 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
     }
 
     .inline-link {
+      appearance: none;
+      background: transparent;
+      border: 0;
       color: var(--vscode-textLink-foreground);
       cursor: pointer;
+      display: inline;
+      font: inherit;
+      min-height: 0;
+      padding: 0;
       text-decoration: none;
     }
 
@@ -1032,6 +1183,20 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
   </style>
 </head>
 <body>
+  <div id="find-widget" class="find-widget hidden" role="search">
+    <div class="find-part">
+      <input type="text" id="find-input" class="find-input" placeholder="Find" aria-label="Find">
+      <div class="find-toggles">
+        <button type="button" class="find-toggle" id="find-case" title="Match Case (Alt+C)" aria-label="Match Case" aria-pressed="false">Aa</button>
+        <button type="button" class="find-toggle" id="find-word" title="Match Whole Word (Alt+W)" aria-label="Match Whole Word" aria-pressed="false">ab</button>
+        <button type="button" class="find-toggle" id="find-regex" title="Use Regular Expression (Alt+R)" aria-label="Use Regular Expression" aria-pressed="false">.*</button>
+      </div>
+      <span class="find-count" id="find-count"></span>
+      <button type="button" class="find-nav" id="find-prev" title="Previous Match (Shift+Enter)" aria-label="Previous Match">&#8593;</button>
+      <button type="button" class="find-nav" id="find-next" title="Next Match (Enter)" aria-label="Next Match">&#8595;</button>
+      <button type="button" class="find-nav find-close" id="find-close" title="Close (Escape)" aria-label="Close">&#10005;</button>
+    </div>
+  </div>
   <main class="shell">
     <header>
       <div>
@@ -1039,6 +1204,7 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
         <div class="summary"><span id="selection-summary">0 selected.</span> <span class="tracked-count" title="${escapeAttr(statusTooltip)}">${projects.length} tracked</span>. <span id="refresh-countdown" data-next-refresh-at="${nextRefreshAt}">Refreshing in ${Math.max(1, Math.ceil((nextRefreshAt - Date.now()) / 1000))}s</span>.</div>
       </div>
       <div class="header-actions">
+        <input type="search" id="project-search" class="search-input" placeholder="Search projects..." aria-label="Search projects by name">
         <label class="checkbox-control"><input type="checkbox" data-setting="openOnStartup" ${config.openOnStartup ? "checked" : ""}> Open on startup</label>
         <label class="checkbox-control"><input type="checkbox" data-setting="pinOnStartup" ${config.pinOnStartup ? "checked" : ""}> Pin on startup</label>
         <button data-command="refresh">Refresh</button>
@@ -1129,6 +1295,7 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
       vscode.setState({
         activeTab: (vscode.getState() || {}).activeTab || "projects-view",
         parentFilter: document.getElementById("parent-filter")?.value || "",
+        searchQuery: document.getElementById("project-search")?.value || "",
         projectViewMode: document.querySelector(".view-mode.active")?.dataset.viewMode || "cards",
         selectedPaths: [...selectedPaths],
         pendingOperations: [...pendingOperations],
@@ -1136,12 +1303,16 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
       });
     }
 
-    function applyParentFilter(parentFilter) {
+    function applyFilters() {
+      const parentFilter = document.getElementById("parent-filter")?.value || "";
+      const searchQuery = (document.getElementById("project-search")?.value || "").trim().toLowerCase();
       for (const element of document.querySelectorAll("[data-project-path]")) {
         const isAddCard = element.classList.contains("add-card");
-        element.classList.toggle("is-filtered", !isAddCard && parentFilter !== "" && element.dataset.parentPath !== parentFilter);
+        const matchesParent = isAddCard || parentFilter === "" || element.dataset.parentPath === parentFilter;
+        const matchesSearch = isAddCard || searchQuery === "" || (element.dataset.projectName || "").includes(searchQuery);
+        element.classList.toggle("is-filtered", !(matchesParent && matchesSearch));
       }
-      persistState({ parentFilter });
+      persistState();
       updateSelectionUi();
     }
 
@@ -1225,8 +1396,12 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
     const parentFilter = document.getElementById("parent-filter");
     if (parentFilter) {
       parentFilter.value = persistedState.parentFilter || "";
-      applyParentFilter(parentFilter.value);
     }
+    const projectSearch = document.getElementById("project-search");
+    if (projectSearch) {
+      projectSearch.value = persistedState.searchQuery || "";
+    }
+    applyFilters();
     updateSelectionUi();
     updateRefreshCountdown();
     if (refreshCountdown && nextRefreshAt) {
@@ -1245,6 +1420,230 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
       const message = event.data;
       if (message.command === "operationComplete" && message.requestId) {
         completeOperation(message.requestId);
+      }
+    });
+
+    const findWidget = document.getElementById("find-widget");
+    const findInput = document.getElementById("find-input");
+    const findCount = document.getElementById("find-count");
+    const findOptions = { caseSensitive: false, wholeWord: false, regex: false };
+    let findMatches = [];
+    let currentMatchIndex = -1;
+
+    const BACKSLASH = String.fromCharCode(92);
+    const REGEX_SPECIAL_CHARS = ".*+?^" + "$" + "{}()|[]" + BACKSLASH;
+
+    function escapeRegExp(value) {
+      let result = "";
+      for (const ch of value) {
+        result += REGEX_SPECIAL_CHARS.indexOf(ch) === -1 ? ch : BACKSLASH + ch;
+      }
+      return result;
+    }
+
+    function buildFindMatcher(query) {
+      if (!query) {
+        return null;
+      }
+      let source = findOptions.regex ? query : escapeRegExp(query);
+      if (findOptions.wholeWord) {
+        source = BACKSLASH + "b(?:" + source + ")" + BACKSLASH + "b";
+      }
+      try {
+        return new RegExp(source, "g" + (findOptions.caseSensitive ? "" : "i"));
+      } catch {
+        return null;
+      }
+    }
+
+    function collectFindTextNodes(root) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+          if (!node.nodeValue || !node.nodeValue.trim()) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          const parent = node.parentElement;
+          if (!parent || parent.closest("#find-widget, script, style")) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          if (parent.closest(".view.hidden, .mode-view.hidden, .is-filtered")) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      });
+      const nodes = [];
+      let current;
+      while ((current = walker.nextNode())) {
+        nodes.push(current);
+      }
+      return nodes;
+    }
+
+    function clearFindHighlights() {
+      const parents = new Set();
+      for (const mark of document.querySelectorAll("mark.find-match")) {
+        const parent = mark.parentNode;
+        if (!parent) {
+          continue;
+        }
+        parent.replaceChild(document.createTextNode(mark.textContent || ""), mark);
+        parents.add(parent);
+      }
+      for (const parent of parents) {
+        parent.normalize();
+      }
+      findMatches = [];
+      currentMatchIndex = -1;
+    }
+
+    function updateFindCount() {
+      if (!findCount || !findInput) {
+        return;
+      }
+      if (!findInput.value) {
+        findCount.textContent = "";
+      } else if (findMatches.length === 0) {
+        findCount.textContent = "No results";
+      } else {
+        findCount.textContent = (currentMatchIndex + 1) + " of " + findMatches.length;
+      }
+    }
+
+    function updateActiveFindMatch() {
+      for (const mark of findMatches) {
+        mark.classList.remove("current");
+      }
+      const active = findMatches[currentMatchIndex];
+      if (active) {
+        active.classList.add("current");
+        active.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+    }
+
+    function runFind() {
+      clearFindHighlights();
+      const query = findInput?.value || "";
+      const matcher = buildFindMatcher(query);
+      if (matcher) {
+        for (const node of collectFindTextNodes(document.querySelector(".shell"))) {
+          const text = node.nodeValue;
+          matcher.lastIndex = 0;
+          let match;
+          let lastIndex = 0;
+          let found = false;
+          const frag = document.createDocumentFragment();
+          while ((match = matcher.exec(text))) {
+            if (match[0].length === 0) {
+              matcher.lastIndex += 1;
+              continue;
+            }
+            found = true;
+            if (match.index > lastIndex) {
+              frag.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+            }
+            const markEl = document.createElement("mark");
+            markEl.className = "find-match";
+            markEl.textContent = match[0];
+            frag.appendChild(markEl);
+            findMatches.push(markEl);
+            lastIndex = match.index + match[0].length;
+          }
+          if (found) {
+            if (lastIndex < text.length) {
+              frag.appendChild(document.createTextNode(text.slice(lastIndex)));
+            }
+            node.parentNode.replaceChild(frag, node);
+          }
+        }
+      }
+      currentMatchIndex = findMatches.length > 0 ? 0 : -1;
+      updateActiveFindMatch();
+      updateFindCount();
+    }
+
+    function goToFindMatch(delta) {
+      if (findMatches.length === 0) {
+        return;
+      }
+      currentMatchIndex = (currentMatchIndex + delta + findMatches.length) % findMatches.length;
+      updateActiveFindMatch();
+      updateFindCount();
+    }
+
+    function toggleFindOption(key, button) {
+      findOptions[key] = !findOptions[key];
+      button.classList.toggle("active", findOptions[key]);
+      button.setAttribute("aria-pressed", String(findOptions[key]));
+      runFind();
+    }
+
+    function openFindWidget() {
+      if (!findWidget || !findInput) {
+        return;
+      }
+      findWidget.classList.remove("hidden");
+      findInput.focus();
+      findInput.select();
+      if (findInput.value) {
+        runFind();
+      }
+    }
+
+    function closeFindWidget() {
+      if (!findWidget) {
+        return;
+      }
+      findWidget.classList.add("hidden");
+      clearFindHighlights();
+      updateFindCount();
+    }
+
+    findInput?.addEventListener("input", runFind);
+    findInput?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        goToFindMatch(event.shiftKey ? -1 : 1);
+      }
+    });
+    document.getElementById("find-close")?.addEventListener("click", closeFindWidget);
+    document.getElementById("find-next")?.addEventListener("click", () => goToFindMatch(1));
+    document.getElementById("find-prev")?.addEventListener("click", () => goToFindMatch(-1));
+    document.getElementById("find-case")?.addEventListener("click", (event) => toggleFindOption("caseSensitive", event.currentTarget));
+    document.getElementById("find-word")?.addEventListener("click", (event) => toggleFindOption("wholeWord", event.currentTarget));
+    document.getElementById("find-regex")?.addEventListener("click", (event) => toggleFindOption("regex", event.currentTarget));
+
+    document.addEventListener("keydown", (event) => {
+      const isFindShortcut = (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "f";
+      if (isFindShortcut) {
+        event.preventDefault();
+        openFindWidget();
+        return;
+      }
+
+      const widgetOpen = findWidget && !findWidget.classList.contains("hidden");
+      if (!widgetOpen) {
+        return;
+      }
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeFindWidget();
+        return;
+      }
+
+      if (event.altKey && document.activeElement && findWidget.contains(document.activeElement)) {
+        const key = event.key.toLowerCase();
+        if (key === "c") {
+          event.preventDefault();
+          toggleFindOption("caseSensitive", document.getElementById("find-case"));
+        } else if (key === "w") {
+          event.preventDefault();
+          toggleFindOption("wholeWord", document.getElementById("find-word"));
+        } else if (key === "r") {
+          event.preventDefault();
+          toggleFindOption("regex", document.getElementById("find-regex"));
+        }
       }
     });
 
@@ -1306,9 +1705,15 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], config:
       });
     });
 
+    document.addEventListener("input", (event) => {
+      if (event.target.id === "project-search") {
+        applyFilters();
+      }
+    });
+
     document.addEventListener("change", (event) => {
       if (event.target.id === "parent-filter") {
-        applyParentFilter(event.target.value);
+        applyFilters();
       }
 
       if (event.target.dataset?.setting) {
@@ -1352,7 +1757,7 @@ function countProjectStatuses(projects: Project[]): Record<Project["status"], nu
 }
 
 function renderProjectCard(project: Project): string {
-  return `<article class="card" data-project-path="${escapeAttr(project.path)}" data-parent-path="${escapeAttr(path.dirname(project.path))}">
+  return `<article class="card" data-project-path="${escapeAttr(project.path)}" data-parent-path="${escapeAttr(path.dirname(project.path))}" data-project-name="${escapeAttr(getProjectDisplayName(project).toLowerCase())}">
     <div class="card-top">
       <div class="card-heading">
         <div class="project-title-row">
@@ -1391,7 +1796,7 @@ function renderProjectCard(project: Project): string {
 }
 
 function renderProjectRow(project: Project): string {
-  return `<tr data-project-path="${escapeAttr(project.path)}" data-parent-path="${escapeAttr(path.dirname(project.path))}">
+  return `<tr data-project-path="${escapeAttr(project.path)}" data-parent-path="${escapeAttr(path.dirname(project.path))}" data-project-name="${escapeAttr(getProjectDisplayName(project).toLowerCase())}">
     <td><div class="table-project-title">${renderProjectTitle(project, "div")}${renderProjectActions(project)}</div></td>
     <td>${renderStatusBadge(project.status)}</td>
     <td>${escapeHtml(project.kind)}</td>
@@ -1409,14 +1814,19 @@ function renderProjectActions(project: Project): string {
   const projectPath = escapeAttr(project.path);
   return `<span class="project-actions">
     <button class="text-action" data-command="openTerminal" data-path="${projectPath}">terminal</button>
-    <button class="text-action" data-command="openAgent" data-path="${projectPath}">agent</button>
+    <button class="text-action" data-command="openAgent" data-path="${projectPath}">codex</button>
+    <button class="text-action" data-command="openClaudeAgent" data-path="${projectPath}">claude</button>
   </span>`;
+}
+
+function getProjectDisplayName(project: Project): string {
+  return project.readme.heading?.trim() || project.name;
 }
 
 function renderProjectTitle(project: Project, tagName: "h2" | "div"): string {
   const folderName = project.name;
   const readmeName = project.readme.heading?.trim();
-  const displayName = readmeName || folderName;
+  const displayName = getProjectDisplayName(project);
   const hasReadmeName = readmeName !== undefined && readmeName.length > 0;
   const hasMismatch = hasReadmeName && normalizeProjectName(readmeName) !== normalizeProjectName(folderName);
   const needsReadmeName = !hasReadmeName;
@@ -1439,7 +1849,8 @@ function renderLicenseSummary(license: LicenseSummary): string {
   if (!license.exists || !license.path) {
     return `<span class="attention">No LICENSE</span>`;
   }
-  return `<button class="readme-link" data-command="openFile" data-path="${escapeAttr(license.path)}" title="${escapeAttr(license.path)}">${escapeHtml(license.label || "LICENSE")}</button>`;
+  const className = license.hasContent ? "readme-link" : "readme-link attention";
+  return `<button class="${className}" data-command="openFile" data-path="${escapeAttr(license.path)}" title="${escapeAttr(license.path)}">${escapeHtml(license.label || "LICENSE")}</button>`;
 }
 
 function renderPortOrVersionDefinition(project: Project): string {
