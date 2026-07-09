@@ -2,7 +2,7 @@
   "name": "project-monitor",
   "displayName": "Project Monitor",
   "description": "VS Code dashboard for local project folders and their serving status.",
-  "version": "0.0.11",
+  "version": "0.0.12",
   "publisher": "everyhedron",
   "license": "MIT",
   "engines": {

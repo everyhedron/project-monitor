@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import * as fs from "fs/promises";
+import type { Dirent } from "fs";
 import * as os from "os";
 import * as path from "path";
 import { addProjects, removeProjects } from "./config";
@@ -93,24 +94,11 @@ export class Dashboard {
       this.context.subscriptions
     );
 
-    panel.onDidChangeViewState(
-      () => {
-        if (this.panel !== panel) {
-          return;
-        }
-        if (panel.visible) {
-          void this.refresh(false);
-        }
-      },
-      undefined,
-      this.context.subscriptions
-    );
-
     this.startTimer();
     void this.refresh();
   }
 
-  async refresh(resetTimer = true): Promise<void> {
+  async refresh(): Promise<void> {
     if (!this.panel) {
       return;
     }
@@ -118,7 +106,7 @@ export class Dashboard {
       return this.refreshInFlight;
     }
 
-    this.refreshInFlight = this.refreshNow(resetTimer);
+    this.refreshInFlight = this.refreshNow();
     try {
       await this.refreshInFlight;
     } catch (error) {
@@ -157,7 +145,7 @@ export class Dashboard {
     }
     this.timer = setTimeout(() => {
       this.timer = undefined;
-      void this.refresh(false);
+      void this.refresh();
     }, Math.max(0, this.nextRefreshAt - now));
   }
 
@@ -168,7 +156,7 @@ export class Dashboard {
     }
   }
 
-  private async refreshNow(resetTimer = true): Promise<void> {
+  private async refreshNow(): Promise<void> {
     if (!this.panel) {
       return;
     }
@@ -188,9 +176,8 @@ export class Dashboard {
     }
     this.lastProjects = projects;
     this.updateStatusBar(projects);
-    if (resetTimer || this.nextRefreshAt <= Date.now()) {
-      this.nextRefreshAt = Date.now() + config.refreshIntervalMs;
-    }
+    // Every call here does a real fetch, so the countdown always restarts to reflect it.
+    this.nextRefreshAt = Date.now() + config.refreshIntervalMs;
     this.panel.webview.html = renderDashboard(projects, suggestions, this.nextRefreshAt);
     this.startTimer();
   }
@@ -356,12 +343,13 @@ export class Dashboard {
       return;
     }
 
+    const session = await findClaudeSession(homeDir, projectName);
     const terminal = vscode.window.createTerminal({
       cwd: homeDir,
       name: terminalName
     });
     terminal.show();
-    terminal.sendText("claude");
+    terminal.sendText(session ? `claude --resume ${session.id}` : "claude");
   }
 
   private async confirmAndRemoveProjects(paths: string[]): Promise<void> {
@@ -570,113 +558,6 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], nextRef
       min-height: 30px;
       min-width: 180px;
       padding: 4px 9px;
-    }
-
-    .find-widget {
-      align-items: center;
-      background: var(--vscode-editorWidget-background, var(--card));
-      border: 1px solid var(--vscode-editorWidget-border, var(--border));
-      border-radius: 4px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
-      color: var(--vscode-editorWidget-foreground, var(--fg));
-      display: flex;
-      gap: 2px;
-      padding: 4px;
-      position: fixed;
-      right: 24px;
-      top: 12px;
-      z-index: 50;
-    }
-
-    .find-widget.hidden {
-      display: none;
-    }
-
-    .find-part {
-      align-items: center;
-      display: flex;
-      gap: 2px;
-    }
-
-    .find-input {
-      appearance: none;
-      background: var(--vscode-input-background);
-      border: 1px solid var(--vscode-input-border, var(--border));
-      border-radius: 3px;
-      color: var(--vscode-input-foreground);
-      font: inherit;
-      height: 26px;
-      padding: 2px 8px;
-      width: 200px;
-    }
-
-    .find-toggles {
-      display: flex;
-      gap: 1px;
-      margin-left: -28px;
-    }
-
-    .find-toggle {
-      appearance: none;
-      background: transparent;
-      border: 1px solid transparent;
-      border-radius: 3px;
-      color: var(--muted);
-      cursor: pointer;
-      font: inherit;
-      font-size: 11px;
-      font-weight: 600;
-      height: 20px;
-      min-height: 0;
-      padding: 0 4px;
-    }
-
-    .find-toggle.active {
-      background: var(--vscode-inputOption-activeBackground, color-mix(in srgb, var(--button) 35%, transparent));
-      border-color: var(--vscode-inputOption-activeBorder, var(--button));
-      color: var(--vscode-inputOption-activeForeground, var(--fg));
-    }
-
-    .find-count {
-      color: var(--muted);
-      font-size: 12px;
-      min-width: 72px;
-      padding: 0 6px;
-      text-align: center;
-      white-space: nowrap;
-    }
-
-    .find-nav {
-      appearance: none;
-      background: transparent;
-      border: 0;
-      border-radius: 3px;
-      color: var(--fg);
-      cursor: pointer;
-      font: inherit;
-      height: 26px;
-      min-height: 0;
-      padding: 0 6px;
-    }
-
-    .find-nav:hover,
-    .find-toggle:hover {
-      background: var(--vscode-toolbar-hoverBackground, color-mix(in srgb, var(--fg) 12%, transparent));
-    }
-
-    .find-nav:disabled {
-      cursor: default;
-      opacity: 0.4;
-    }
-
-    mark.find-match {
-      background: var(--vscode-editor-findMatchHighlightBackground, #ffd54a66);
-      color: inherit;
-      border-radius: 2px;
-    }
-
-    mark.find-match.current {
-      background: var(--vscode-editor-findMatchBackground, #ff9632aa);
     }
 
     .tab {
@@ -928,6 +809,7 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], nextRef
       font: inherit;
       min-height: 0;
       padding: 0;
+      text-align: left;
       text-decoration: none;
     }
 
@@ -1153,20 +1035,6 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], nextRef
   </style>
 </head>
 <body>
-  <div id="find-widget" class="find-widget hidden" role="search">
-    <div class="find-part">
-      <input type="text" id="find-input" class="find-input" placeholder="Find" aria-label="Find">
-      <div class="find-toggles">
-        <button type="button" class="find-toggle" id="find-case" title="Match Case (Alt+C)" aria-label="Match Case" aria-pressed="false">Aa</button>
-        <button type="button" class="find-toggle" id="find-word" title="Match Whole Word (Alt+W)" aria-label="Match Whole Word" aria-pressed="false">ab</button>
-        <button type="button" class="find-toggle" id="find-regex" title="Use Regular Expression (Alt+R)" aria-label="Use Regular Expression" aria-pressed="false">.*</button>
-      </div>
-      <span class="find-count" id="find-count"></span>
-      <button type="button" class="find-nav" id="find-prev" title="Previous Match (Shift+Enter)" aria-label="Previous Match">&#8593;</button>
-      <button type="button" class="find-nav" id="find-next" title="Next Match (Enter)" aria-label="Next Match">&#8595;</button>
-      <button type="button" class="find-nav find-close" id="find-close" title="Close (Escape)" aria-label="Close">&#10005;</button>
-    </div>
-  </div>
   <main class="shell">
     <header>
       <div>
@@ -1391,227 +1259,13 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], nextRef
       }
     });
 
-    const findWidget = document.getElementById("find-widget");
-    const findInput = document.getElementById("find-input");
-    const findCount = document.getElementById("find-count");
-    const findOptions = { caseSensitive: false, wholeWord: false, regex: false };
-    let findMatches = [];
-    let currentMatchIndex = -1;
-
-    const BACKSLASH = String.fromCharCode(92);
-    const REGEX_SPECIAL_CHARS = ".*+?^" + "$" + "{}()|[]" + BACKSLASH;
-
-    function escapeRegExp(value) {
-      let result = "";
-      for (const ch of value) {
-        result += REGEX_SPECIAL_CHARS.indexOf(ch) === -1 ? ch : BACKSLASH + ch;
-      }
-      return result;
-    }
-
-    function buildFindMatcher(query) {
-      if (!query) {
-        return null;
-      }
-      let source = findOptions.regex ? query : escapeRegExp(query);
-      if (findOptions.wholeWord) {
-        source = BACKSLASH + "b(?:" + source + ")" + BACKSLASH + "b";
-      }
-      try {
-        return new RegExp(source, "g" + (findOptions.caseSensitive ? "" : "i"));
-      } catch {
-        return null;
-      }
-    }
-
-    function collectFindTextNodes(root) {
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-        acceptNode(node) {
-          if (!node.nodeValue || !node.nodeValue.trim()) {
-            return NodeFilter.FILTER_REJECT;
-          }
-          const parent = node.parentElement;
-          if (!parent || parent.closest("#find-widget, script, style")) {
-            return NodeFilter.FILTER_REJECT;
-          }
-          if (parent.closest(".view.hidden, .mode-view.hidden, .is-filtered")) {
-            return NodeFilter.FILTER_REJECT;
-          }
-          return NodeFilter.FILTER_ACCEPT;
-        }
-      });
-      const nodes = [];
-      let current;
-      while ((current = walker.nextNode())) {
-        nodes.push(current);
-      }
-      return nodes;
-    }
-
-    function clearFindHighlights() {
-      const parents = new Set();
-      for (const mark of document.querySelectorAll("mark.find-match")) {
-        const parent = mark.parentNode;
-        if (!parent) {
-          continue;
-        }
-        parent.replaceChild(document.createTextNode(mark.textContent || ""), mark);
-        parents.add(parent);
-      }
-      for (const parent of parents) {
-        parent.normalize();
-      }
-      findMatches = [];
-      currentMatchIndex = -1;
-    }
-
-    function updateFindCount() {
-      if (!findCount || !findInput) {
-        return;
-      }
-      if (!findInput.value) {
-        findCount.textContent = "";
-      } else if (findMatches.length === 0) {
-        findCount.textContent = "No results";
-      } else {
-        findCount.textContent = (currentMatchIndex + 1) + " of " + findMatches.length;
-      }
-    }
-
-    function updateActiveFindMatch() {
-      for (const mark of findMatches) {
-        mark.classList.remove("current");
-      }
-      const active = findMatches[currentMatchIndex];
-      if (active) {
-        active.classList.add("current");
-        active.scrollIntoView({ block: "center", behavior: "smooth" });
-      }
-    }
-
-    function runFind() {
-      clearFindHighlights();
-      const query = findInput?.value || "";
-      const matcher = buildFindMatcher(query);
-      if (matcher) {
-        for (const node of collectFindTextNodes(document.querySelector(".shell"))) {
-          const text = node.nodeValue;
-          matcher.lastIndex = 0;
-          let match;
-          let lastIndex = 0;
-          let found = false;
-          const frag = document.createDocumentFragment();
-          while ((match = matcher.exec(text))) {
-            if (match[0].length === 0) {
-              matcher.lastIndex += 1;
-              continue;
-            }
-            found = true;
-            if (match.index > lastIndex) {
-              frag.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
-            }
-            const markEl = document.createElement("mark");
-            markEl.className = "find-match";
-            markEl.textContent = match[0];
-            frag.appendChild(markEl);
-            findMatches.push(markEl);
-            lastIndex = match.index + match[0].length;
-          }
-          if (found) {
-            if (lastIndex < text.length) {
-              frag.appendChild(document.createTextNode(text.slice(lastIndex)));
-            }
-            node.parentNode.replaceChild(frag, node);
-          }
-        }
-      }
-      currentMatchIndex = findMatches.length > 0 ? 0 : -1;
-      updateActiveFindMatch();
-      updateFindCount();
-    }
-
-    function goToFindMatch(delta) {
-      if (findMatches.length === 0) {
-        return;
-      }
-      currentMatchIndex = (currentMatchIndex + delta + findMatches.length) % findMatches.length;
-      updateActiveFindMatch();
-      updateFindCount();
-    }
-
-    function toggleFindOption(key, button) {
-      findOptions[key] = !findOptions[key];
-      button.classList.toggle("active", findOptions[key]);
-      button.setAttribute("aria-pressed", String(findOptions[key]));
-      runFind();
-    }
-
-    function openFindWidget() {
-      if (!findWidget || !findInput) {
-        return;
-      }
-      findWidget.classList.remove("hidden");
-      findInput.focus();
-      findInput.select();
-      if (findInput.value) {
-        runFind();
-      }
-    }
-
-    function closeFindWidget() {
-      if (!findWidget) {
-        return;
-      }
-      findWidget.classList.add("hidden");
-      clearFindHighlights();
-      updateFindCount();
-    }
-
-    findInput?.addEventListener("input", runFind);
-    findInput?.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        goToFindMatch(event.shiftKey ? -1 : 1);
-      }
-    });
-    document.getElementById("find-close")?.addEventListener("click", closeFindWidget);
-    document.getElementById("find-next")?.addEventListener("click", () => goToFindMatch(1));
-    document.getElementById("find-prev")?.addEventListener("click", () => goToFindMatch(-1));
-    document.getElementById("find-case")?.addEventListener("click", (event) => toggleFindOption("caseSensitive", event.currentTarget));
-    document.getElementById("find-word")?.addEventListener("click", (event) => toggleFindOption("wholeWord", event.currentTarget));
-    document.getElementById("find-regex")?.addEventListener("click", (event) => toggleFindOption("regex", event.currentTarget));
-
     document.addEventListener("keydown", (event) => {
       const isFindShortcut = (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "f";
       if (isFindShortcut) {
         event.preventDefault();
-        openFindWidget();
-        return;
-      }
-
-      const widgetOpen = findWidget && !findWidget.classList.contains("hidden");
-      if (!widgetOpen) {
-        return;
-      }
-
-      if (event.key === "Escape") {
-        event.preventDefault();
-        closeFindWidget();
-        return;
-      }
-
-      if (event.altKey && document.activeElement && findWidget.contains(document.activeElement)) {
-        const key = event.key.toLowerCase();
-        if (key === "c") {
-          event.preventDefault();
-          toggleFindOption("caseSensitive", document.getElementById("find-case"));
-        } else if (key === "w") {
-          event.preventDefault();
-          toggleFindOption("wholeWord", document.getElementById("find-word"));
-        } else if (key === "r") {
-          event.preventDefault();
-          toggleFindOption("regex", document.getElementById("find-regex"));
-        }
+        const search = document.getElementById("project-search");
+        search?.focus();
+        search?.select();
       }
     });
 
@@ -1661,6 +1315,10 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], nextRef
         pendingOperations.set(requestId, command);
         persistState();
         showLoading(commandElement);
+      }
+
+      if (command === "refresh" && refreshCountdown) {
+        refreshCountdown.textContent = "Refreshing...";
       }
 
       vscode.postMessage({
@@ -2020,6 +1678,89 @@ function parseCodexSessionLine(line: string, sessionIndexPath: string): CodexSes
     logError(`Unable to parse Codex session index line in ${sessionIndexPath}.`, error);
     return undefined;
   }
+}
+
+type ClaudeSession = {
+  id: string;
+  customTitle: string;
+  updatedAt: number;
+};
+
+async function findClaudeSession(homeDir: string, projectName: string): Promise<{ id: string } | undefined> {
+  const projectsDir = path.join(homeDir, ".claude", "projects");
+  const files = await walkClaudeTranscripts(projectsDir);
+  const normalizedProjectName = normalizeSessionName(projectName);
+
+  const sessions = await Promise.all(files.map((file) => readClaudeSessionTitle(file)));
+  return sessions
+    .filter((session): session is ClaudeSession => session !== undefined)
+    .filter((session) => normalizeSessionName(session.customTitle) === normalizedProjectName)
+    .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+}
+
+async function walkClaudeTranscripts(root: string): Promise<string[]> {
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (!isMissingPathError(error)) {
+      logError(`Unable to read Claude projects directory at ${root}.`, error);
+    }
+    return [];
+  }
+
+  const nested = await Promise.all(
+    entries.map((entry) => {
+      if (entry.name === "subagents") {
+        return [];
+      }
+      const fullPath = path.join(root, entry.name);
+      if (entry.isDirectory()) {
+        return walkClaudeTranscripts(fullPath);
+      }
+      return entry.isFile() && entry.name.endsWith(".jsonl") ? [fullPath] : [];
+    })
+  );
+  return nested.flat();
+}
+
+// Only sessions the user has manually renamed (a "custom-title" transcript line) are eligible for
+// resume-by-name matching - AI-generated titles are too noisy/unstable to match a project name against.
+async function readClaudeSessionTitle(transcriptPath: string): Promise<ClaudeSession | undefined> {
+  let stat: Awaited<ReturnType<typeof fs.stat>>;
+  let content: string;
+  try {
+    [stat, content] = await Promise.all([fs.stat(transcriptPath), fs.readFile(transcriptPath, "utf8")]);
+  } catch (error) {
+    if (!isMissingPathError(error)) {
+      logError(`Unable to read Claude transcript at ${transcriptPath}.`, error);
+    }
+    return undefined;
+  }
+
+  let sessionId = path.basename(transcriptPath, ".jsonl");
+  let customTitle: string | undefined;
+
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    let parsed: { type?: string; sessionId?: string; customTitle?: string };
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    if (typeof parsed.sessionId === "string") {
+      sessionId = parsed.sessionId;
+    }
+    if (parsed.type === "custom-title" && typeof parsed.customTitle === "string" && parsed.customTitle) {
+      customTitle = parsed.customTitle;
+    }
+  }
+
+  return customTitle ? { id: sessionId, customTitle, updatedAt: stat.mtimeMs } : undefined;
 }
 
 function toProperProjectName(value: string): string {
