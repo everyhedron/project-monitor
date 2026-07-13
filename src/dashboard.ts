@@ -22,6 +22,11 @@ type DashboardMessage = {
   value?: boolean;
 };
 
+type AgentSessionState = {
+  hasCodexSession: boolean;
+  hasClaudeSession: boolean;
+};
+
 export class Dashboard {
   private panel: vscode.WebviewPanel | undefined;
   private refreshInFlight: Promise<void> | undefined;
@@ -178,12 +183,13 @@ export class Dashboard {
     this.updateStatusBar(projects);
     // Every call here does a real fetch, so the countdown always restarts to reflect it.
     this.nextRefreshAt = Date.now() + config.refreshIntervalMs;
-    this.panel.webview.html = renderDashboard(projects, suggestions, this.nextRefreshAt);
+    const agentSessionStates = await readAgentSessionStates(os.homedir(), projects);
+    this.panel.webview.html = renderDashboard(projects, suggestions, this.nextRefreshAt, agentSessionStates);
     this.startTimer();
   }
 
   private updateStatusBar(projects: Project[]): void {
-    const badCount = projects.filter((project) => project.status === "stopped" || project.status === "stale").length;
+    const badCount = projects.filter((project) => project.status === "stopped").length;
     this.statusBarItem.text = `$(folder-library) ${badCount}/${projects.length}`;
     this.statusBarItem.tooltip = createStatusTooltip(projects);
     this.statusBarItem.show();
@@ -238,11 +244,6 @@ export class Dashboard {
       if (message.command === "copyText" && message.text) {
         await vscode.env.clipboard.writeText(message.text);
         void vscode.window.showInformationMessage("Copied to the clipboard.");
-        return;
-      }
-
-      if (message.command === "reloadWindow") {
-        await vscode.commands.executeCommand("workbench.action.reloadWindow");
         return;
       }
 
@@ -419,7 +420,12 @@ export class Dashboard {
   }
 }
 
-function renderDashboard(projects: Project[], suggestions: Suggestion[], nextRefreshAt: number): string {
+function renderDashboard(
+  projects: Project[],
+  suggestions: Suggestion[],
+  nextRefreshAt: number,
+  agentSessionStates = new Map<string, AgentSessionState>()
+): string {
   const statusTooltip = createStatusTooltip(projects);
   const parentFolders = [...new Set(projects.map((project) => path.dirname(project.path)))].sort((a, b) =>
     a.localeCompare(b, undefined, { sensitivity: "base" })
@@ -451,6 +457,7 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], nextRef
       --stopped: #d29922;
       --git-good: #2ea043;
       --git-bad: #f85149;
+      --version-warning: #d29922;
     }
 
     * {
@@ -704,6 +711,10 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], nextRef
       color: var(--vscode-textLink-activeForeground);
     }
 
+    .text-action.has-session {
+      color: var(--vscode-textLink-foreground);
+    }
+
     .path {
       color: var(--muted);
       font-size: 12px;
@@ -751,11 +762,6 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], nextRef
     .badge.installed {
       border-color: color-mix(in srgb, var(--installed) 55%, var(--border));
       color: var(--installed);
-    }
-
-    .badge.stale {
-      border-color: color-mix(in srgb, var(--git-bad) 60%, var(--border));
-      color: var(--git-bad);
     }
 
     .badge.stopped {
@@ -949,6 +955,14 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], nextRef
       color: var(--git-bad);
     }
 
+    .version-published-current {
+      color: var(--git-good);
+    }
+
+    .version-published-outdated {
+      color: var(--version-warning);
+    }
+
     .suggestion-list {
       display: flex;
       flex-direction: column;
@@ -1068,7 +1082,7 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], nextRef
       </div>
       ${projects.length === 0 ? `<div class="empty">No projects tracked yet. Use Add Project to get started.</div>` : ""}
       <section class="grid mode-view" data-mode-panel="cards">
-        ${projects.map(renderProjectCard).join("")}
+        ${projects.map((project) => renderProjectCard(project, agentSessionStates.get(project.path))).join("")}
         <article class="card add-card">
           <button data-command="addProject">+ Add Project</button>
         </article>
@@ -1090,7 +1104,7 @@ function renderDashboard(projects: Project[], suggestions: Suggestion[], nextRef
             </tr>
           </thead>
           <tbody>
-            ${projects.map(renderProjectRow).join("")}
+            ${projects.map((project) => renderProjectRow(project, agentSessionStates.get(project.path))).join("")}
           </tbody>
         </table>
       </section>
@@ -1353,7 +1367,6 @@ function createStatusTooltip(projects: Project[]): string {
     `${counts.running} running`,
     `${counts.serving} serving`,
     `${counts.installed} installed`,
-    `${counts.stale} stale`,
     `${counts.stopped} stopped`,
     `${counts.unknown} unknown`
   ].join("\n");
@@ -1364,7 +1377,6 @@ function countProjectStatuses(projects: Project[]): Record<Project["status"], nu
     running: 0,
     serving: 0,
     installed: 0,
-    stale: 0,
     stopped: 0,
     unknown: 0
   };
@@ -1374,14 +1386,14 @@ function countProjectStatuses(projects: Project[]): Record<Project["status"], nu
   return counts;
 }
 
-function renderProjectCard(project: Project): string {
+function renderProjectCard(project: Project, agentSessionState?: AgentSessionState): string {
   return `<article class="card" data-project-path="${escapeAttr(project.path)}" data-parent-path="${escapeAttr(path.dirname(project.path))}" data-project-name="${escapeAttr(getProjectDisplayName(project).toLowerCase())}">
     <div class="card-top">
       <div class="card-heading">
         <div class="project-title-row">
           ${renderProjectTitle(project, "h2")}
         </div>
-        ${renderProjectActions(project)}
+        ${renderProjectActions(project, agentSessionState)}
         <div class="path"><button class="path-button" data-command="openFolder" data-path="${escapeAttr(project.path)}">${escapeHtml(project.path)}</button></div>
       </div>
       ${renderStatusBadge(project.status)}
@@ -1413,9 +1425,9 @@ function renderProjectCard(project: Project): string {
   </article>`;
 }
 
-function renderProjectRow(project: Project): string {
+function renderProjectRow(project: Project, agentSessionState?: AgentSessionState): string {
   return `<tr data-project-path="${escapeAttr(project.path)}" data-parent-path="${escapeAttr(path.dirname(project.path))}" data-project-name="${escapeAttr(getProjectDisplayName(project).toLowerCase())}">
-    <td><div class="table-project-title">${renderProjectTitle(project, "div")}${renderProjectActions(project)}</div></td>
+    <td><div class="table-project-title">${renderProjectTitle(project, "div")}${renderProjectActions(project, agentSessionState)}</div></td>
     <td>${renderStatusBadge(project.status)}</td>
     <td>${escapeHtml(project.kind)}</td>
     <td>${renderPortOrVersionCell(project)}</td>
@@ -1428,12 +1440,14 @@ function renderProjectRow(project: Project): string {
   </tr>`;
 }
 
-function renderProjectActions(project: Project): string {
+function renderProjectActions(project: Project, agentSessionState?: AgentSessionState): string {
   const projectPath = escapeAttr(project.path);
+  const codexClass = agentSessionState?.hasCodexSession ? "text-action has-session" : "text-action";
+  const claudeClass = agentSessionState?.hasClaudeSession ? "text-action has-session" : "text-action";
   return `<span class="project-actions">
     <button class="text-action" data-command="openTerminal" data-path="${projectPath}">terminal</button>
-    <button class="text-action" data-command="openAgent" data-path="${projectPath}">codex</button>
-    <button class="text-action" data-command="openClaudeAgent" data-path="${projectPath}">claude</button>
+    <button class="${codexClass}" data-command="openAgent" data-path="${projectPath}">codex</button>
+    <button class="${claudeClass}" data-command="openClaudeAgent" data-path="${projectPath}">claude</button>
   </span>`;
 }
 
@@ -1517,12 +1531,17 @@ function renderVscodeExtensionVersion(project: Project): string {
   const installed = extension?.installedVersion ?? "not installed";
   const latest = extension?.latestVersion ?? "unknown";
   const isCurrent = extension?.installedVersion !== undefined && extension.installedVersion === extension.latestVersion;
+  const published = extension?.publishedVersion;
+  const publishedLabel =
+    published === undefined
+      ? `<span class="muted-status">not published</span>`
+      : `<span class="${published === extension?.latestVersion ? "version-published-current" : "version-published-outdated"}">published ${escapeHtml(published)}</span>`;
   const label = `${installed} / ${latest}`;
   const className = isCurrent ? "readme-link" : "readme-link attention";
   if (extension?.packagePath) {
-    return `<button class="${className}" data-command="openFolder" data-path="${escapeAttr(extension.packagePath)}" title="${escapeAttr(extension.packagePath)}">${escapeHtml(label)}</button>`;
+    return `<button class="${className}" data-command="openFolder" data-path="${escapeAttr(extension.packagePath)}" title="${escapeAttr(extension.packagePath)}">${escapeHtml(label)}</button> ${publishedLabel}`;
   }
-  return `<span class="${isCurrent ? "" : "attention"}">${escapeHtml(label)}</span>`;
+  return `<span class="${isCurrent ? "" : "attention"}">${escapeHtml(label)}</span> ${publishedLabel}`;
 }
 
 function renderServiceSummary(service: ServiceSummary | undefined): string {
@@ -1542,9 +1561,6 @@ function renderServiceSummary(service: ServiceSummary | undefined): string {
 }
 
 function renderStatusBadge(status: Project["status"]): string {
-  if (status === "stale") {
-    return `<button class="badge stale" data-command="reloadWindow" title="Reload the VS Code window to activate the installed extension">Stale</button>`;
-  }
   return `<span class="badge ${status}">${escapeHtml(status)}</span>`;
 }
 
@@ -1641,6 +1657,14 @@ type CodexSession = {
 };
 
 async function findCodexSession(homeDir: string, projectName: string): Promise<{ id: string } | undefined> {
+  const sessions = await readCodexSessions(homeDir);
+  const normalizedProjectName = normalizeSessionName(projectName);
+  return sessions
+    .filter((session) => normalizeSessionName(session.threadName) === normalizedProjectName)
+    .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+}
+
+async function readCodexSessions(homeDir: string): Promise<CodexSession[]> {
   const sessionIndexPath = path.join(homeDir, ".codex", "session_index.jsonl");
   let raw: string;
   try {
@@ -1649,17 +1673,14 @@ async function findCodexSession(homeDir: string, projectName: string): Promise<{
     if (!isMissingPathError(error)) {
       logError(`Unable to read Codex session index at ${sessionIndexPath}.`, error);
     }
-    return undefined;
+    return [];
   }
 
-  const normalizedProjectName = normalizeSessionName(projectName);
   return raw
     .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => parseCodexSessionLine(line, sessionIndexPath))
-    .filter((session): session is CodexSession => session !== undefined)
-    .filter((session) => normalizeSessionName(session.threadName) === normalizedProjectName)
-    .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    .filter((session): session is CodexSession => session !== undefined);
 }
 
 function parseCodexSessionLine(line: string, sessionIndexPath: string): CodexSession | undefined {
@@ -1687,15 +1708,38 @@ type ClaudeSession = {
 };
 
 async function findClaudeSession(homeDir: string, projectName: string): Promise<{ id: string } | undefined> {
-  const projectsDir = path.join(homeDir, ".claude", "projects");
-  const files = await walkClaudeTranscripts(projectsDir);
+  const sessions = await readClaudeSessions(homeDir);
   const normalizedProjectName = normalizeSessionName(projectName);
 
-  const sessions = await Promise.all(files.map((file) => readClaudeSessionTitle(file)));
   return sessions
-    .filter((session): session is ClaudeSession => session !== undefined)
     .filter((session) => normalizeSessionName(session.customTitle) === normalizedProjectName)
     .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+}
+
+async function readAgentSessionStates(homeDir: string, projects: Project[]): Promise<Map<string, AgentSessionState>> {
+  const [codexSessions, claudeSessions] = await Promise.all([readCodexSessions(homeDir), readClaudeSessions(homeDir)]);
+  const codexNames = new Set(codexSessions.map((session) => normalizeSessionName(session.threadName)));
+  const claudeNames = new Set(claudeSessions.map((session) => normalizeSessionName(session.customTitle)));
+
+  return new Map(
+    projects.map((project) => {
+      const displayName = normalizeSessionName(getProjectDisplayName(project));
+      return [
+        project.path,
+        {
+          hasCodexSession: codexNames.has(displayName),
+          hasClaudeSession: claudeNames.has(displayName)
+        }
+      ];
+    })
+  );
+}
+
+async function readClaudeSessions(homeDir: string): Promise<ClaudeSession[]> {
+  const projectsDir = path.join(homeDir, ".claude", "projects");
+  const files = await walkClaudeTranscripts(projectsDir);
+  const sessions = await Promise.all(files.map((file) => readClaudeSessionTitle(file)));
+  return sessions.filter((session): session is ClaudeSession => session !== undefined);
 }
 
 async function walkClaudeTranscripts(root: string): Promise<string[]> {

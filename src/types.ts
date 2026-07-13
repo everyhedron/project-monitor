@@ -1,6 +1,6 @@
 export type ProjectKind = "node" | "express" | "next" | "vite" | "astro" | "python" | "static" | "pm2" | "vsce" | "unknown";
 
-export type ProjectStatus = "running" | "serving" | "installed" | "stale" | "stopped" | "unknown";
+export type ProjectStatus = "running" | "serving" | "installed" | "stopped" | "unknown";
 
 export type PublishedRoute = {
   domain: string;
@@ -46,6 +46,7 @@ export type VscodeExtensionSummary = {
   id?: string;
   installedVersion?: string;
   latestVersion?: string;
+  publishedVersion?: string;
   packagePath?: string;
 };
 

@@ -11,7 +11,7 @@ export function readConfig(): ProjectMonitorConfig {
   const config = vscode.workspace.getConfiguration("projectMonitor");
   return {
     projects: uniqueStrings(config.get<string[]>("projects", [])).map(normalizePath),
-    refreshIntervalMs: Math.max(10000, config.get<number>("refreshIntervalMs", 30000))
+    refreshIntervalMs: Math.max(200, config.get<number>("refreshIntervalMs", 5000))
   };
 }
 

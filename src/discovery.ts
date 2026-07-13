@@ -45,10 +45,18 @@ export type InstalledExtensionInfo = {
   version?: string;
 };
 
+type MarketplaceVersionCacheEntry = {
+  expiresAt: number;
+  version?: string;
+};
+
 type SystemdServiceRef = {
   name: string;
   path: string;
 };
+
+const marketplaceVersionCache = new Map<string, MarketplaceVersionCacheEntry>();
+const marketplaceVersionCacheMs = 10 * 60 * 1000;
 
 export async function discoverWorkspace(
   projectPaths: string[],
@@ -104,7 +112,7 @@ async function buildProject(
     name: path.basename(projectPath),
     path: projectPath,
     kind: detection.kind,
-    status: ports.length > 0 ? "running" : detection.isStaleVscodeExtension ? "stale" : detection.isInstalledVscodeExtension ? "installed" : "stopped",
+    status: ports.length > 0 ? "running" : detection.isInstalledVscodeExtension ? "installed" : "stopped",
     ports,
     urls: ports.map((port) => `http://localhost:${port}`),
     evidence: detection.evidence,
@@ -606,7 +614,6 @@ async function detectProject(projectPath: string, installedExtensions: Map<strin
   evidence: Evidence[];
   suggestedCommands: string[];
   isInstalledVscodeExtension: boolean;
-  isStaleVscodeExtension: boolean;
   vscodeExtension?: VscodeExtensionSummary;
 }> {
   const evidence: Evidence[] = [];
@@ -617,7 +624,7 @@ async function detectProject(projectPath: string, installedExtensions: Map<strin
   if (pm2Config) {
     evidence.push(fileEvidence(projectPath, pm2Config, "This is a PM2 project."));
     suggestedCommands.push("pm2 start ecosystem.config.js");
-    return { kind: "pm2", evidence, suggestedCommands, isInstalledVscodeExtension: false, isStaleVscodeExtension: false };
+    return { kind: "pm2", evidence, suggestedCommands, isInstalledVscodeExtension: false };
   }
 
   if (names.has("package.json")) {
@@ -666,23 +673,19 @@ async function detectProject(projectPath: string, installedExtensions: Map<strin
     const installedExtension =
       packageInfo.extensionId !== undefined ? installedExtensions.get(packageInfo.extensionId) : undefined;
     const isInstalledVscodeExtension = installedExtension !== undefined;
-    const isStaleVscodeExtension =
-      isInstalledVscodeExtension &&
-      packageInfo.version !== undefined &&
-      installedExtension.version !== undefined &&
-      packageInfo.version !== installedExtension.version;
+    const publishedVersion = packageInfo.extensionId ? await readMarketplaceExtensionVersion(packageInfo.extensionId) : undefined;
 
     return {
       kind,
       evidence,
       suggestedCommands: suggestedCommands.length > 0 ? suggestedCommands : ["npm install", "npm run dev"],
       isInstalledVscodeExtension,
-      isStaleVscodeExtension,
       vscodeExtension: packageInfo.isVscodeExtension
         ? {
             id: packageInfo.extensionId,
             installedVersion: installedExtension?.version,
             latestVersion: packageInfo.version,
+            publishedVersion,
             packagePath: await findVscodePackagePath(projectPath, packageInfo.name, packageInfo.version)
           }
         : undefined
@@ -692,29 +695,75 @@ async function detectProject(projectPath: string, installedExtensions: Map<strin
   if (names.has("manage.py")) {
     evidence.push(fileEvidence(projectPath, "manage.py", "This is a Django project."));
     suggestedCommands.push("python manage.py runserver");
-    return { kind: "python", evidence, suggestedCommands, isInstalledVscodeExtension: false, isStaleVscodeExtension: false };
+    return { kind: "python", evidence, suggestedCommands, isInstalledVscodeExtension: false };
   }
 
   const pythonFile = findKnownName(names, ["pyproject.toml", "requirements.txt", "app.py", "main.py"]);
   if (pythonFile) {
     evidence.push(fileEvidence(projectPath, pythonFile, "This is a Python project."));
     suggestedCommands.push("python -m http.server 8000");
-    return { kind: "python", evidence, suggestedCommands, isInstalledVscodeExtension: false, isStaleVscodeExtension: false };
+    return { kind: "python", evidence, suggestedCommands, isInstalledVscodeExtension: false };
   }
 
   if (names.has("index.html")) {
     evidence.push(fileEvidence(projectPath, "index.html", "This is a static site."));
     suggestedCommands.push("python3 -m http.server 8000", "npx serve .");
-    return { kind: "static", evidence, suggestedCommands, isInstalledVscodeExtension: false, isStaleVscodeExtension: false };
+    return { kind: "static", evidence, suggestedCommands, isInstalledVscodeExtension: false };
   }
 
   return {
     kind: "unknown",
     evidence: [{ label: "No recognizable project files found" }],
     suggestedCommands: [],
-    isInstalledVscodeExtension: false,
-    isStaleVscodeExtension: false
+    isInstalledVscodeExtension: false
   };
+}
+
+async function readMarketplaceExtensionVersion(extensionId: string): Promise<string | undefined> {
+  const normalizedId = extensionId.toLowerCase();
+  const cached = marketplaceVersionCache.get(normalizedId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.version;
+  }
+
+  try {
+    const response = await fetch("https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery", {
+      method: "POST",
+      headers: {
+        "Accept": "application/json;api-version=7.2-preview.1;excludeUrls=true",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        filters: [
+          {
+            criteria: [{ filterType: 7, value: normalizedId }]
+          }
+        ],
+        flags: 1
+      })
+    });
+    if (!response.ok) {
+      throw new Error(`Marketplace request failed with HTTP ${response.status}.`);
+    }
+
+    const data = (await response.json()) as {
+      results?: Array<{
+        extensions?: Array<{
+          versions?: Array<{
+            version?: unknown;
+          }>;
+        }>;
+      }>;
+    };
+    const version = data.results?.[0]?.extensions?.[0]?.versions?.[0]?.version;
+    const publishedVersion = typeof version === "string" ? version : undefined;
+    marketplaceVersionCache.set(normalizedId, { version: publishedVersion, expiresAt: Date.now() + marketplaceVersionCacheMs });
+    return publishedVersion;
+  } catch (error) {
+    logWarningOnce(`marketplace:${normalizedId}`, `Unable to check Visual Studio Marketplace version for ${normalizedId}.`, error);
+    marketplaceVersionCache.set(normalizedId, { expiresAt: Date.now() + marketplaceVersionCacheMs });
+    return undefined;
+  }
 }
 
 async function safeReadNames(projectPath: string): Promise<string[]> {
