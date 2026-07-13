@@ -1,10 +1,18 @@
 {
   "name": "project-monitor",
   "displayName": "Project Monitor",
-  "description": "VS Code dashboard for local project folders and their serving status.",
-  "version": "0.0.12",
+  "description": "VS Code dashboard for monitoring local project folders, serving status, Git state, TODOs, and extension publishing state.",
+  "version": "0.0.1",
   "publisher": "everyhedron",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/everyhedron/project-monitor.git"
+  },
+  "homepage": "https://github.com/everyhedron/project-monitor#readme",
+  "bugs": {
+    "url": "https://github.com/everyhedron/project-monitor/issues"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -21,6 +29,7 @@
     "out/**",
     "LICENSE",
     "README.md",
+    "CHANGELOG.md",
     "TODO.md"
   ],
   "contributes": {
@@ -57,7 +66,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "package": "vsce package"
+    "package": "vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^20.14.10",

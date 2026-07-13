@@ -3,3 +3,4 @@ out/
 *.vsix
 image-*.png
 image.png
+.codex/

@@ -955,12 +955,16 @@ function renderDashboard(
       color: var(--git-bad);
     }
 
-    .version-published-current {
+    .version-match {
       color: var(--git-good);
     }
 
-    .version-published-outdated {
+    .version-mismatch {
       color: var(--version-warning);
+    }
+
+    .version-missing {
+      color: var(--git-bad);
     }
 
     .suggestion-list {
@@ -1528,20 +1532,16 @@ function renderPorts(project: Project): string {
 
 function renderVscodeExtensionVersion(project: Project): string {
   const extension = project.vscodeExtension;
-  const installed = extension?.installedVersion ?? "not installed";
-  const latest = extension?.latestVersion ?? "unknown";
-  const isCurrent = extension?.installedVersion !== undefined && extension.installedVersion === extension.latestVersion;
+  const installed = extension?.installedVersion;
   const published = extension?.publishedVersion;
-  const publishedLabel =
-    published === undefined
-      ? `<span class="muted-status">not published</span>`
-      : `<span class="${published === extension?.latestVersion ? "version-published-current" : "version-published-outdated"}">published ${escapeHtml(published)}</span>`;
-  const label = `${installed} / ${latest}`;
-  const className = isCurrent ? "readme-link" : "readme-link attention";
+  const hasBoth = installed !== undefined && published !== undefined;
+  const isMatch = hasBoth && installed === published;
+  const label = `${installed ?? "uninstalled"} / ${published ?? "unpublished"}`;
+  const className = hasBoth ? (isMatch ? "version-match" : "version-mismatch") : "version-missing";
   if (extension?.packagePath) {
-    return `<button class="${className}" data-command="openFolder" data-path="${escapeAttr(extension.packagePath)}" title="${escapeAttr(extension.packagePath)}">${escapeHtml(label)}</button> ${publishedLabel}`;
+    return `<button class="readme-link ${className}" data-command="openFolder" data-path="${escapeAttr(extension.packagePath)}" title="${escapeAttr(extension.packagePath)}">${escapeHtml(label)}</button>`;
   }
-  return `<span class="${isCurrent ? "" : "attention"}">${escapeHtml(label)}</span> ${publishedLabel}`;
+  return `<span class="${className}">${escapeHtml(label)}</span>`;
 }
 
 function renderServiceSummary(service: ServiceSummary | undefined): string {

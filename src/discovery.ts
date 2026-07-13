@@ -328,6 +328,7 @@ function firstParagraph(lines: string[]): string | undefined {
 
 function stripMarkdownInline(value: string): string {
   return value
+    .replace(/<[^>]*>/g, "")
     .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
     .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
     .replace(/[`*_~]/g, "")
