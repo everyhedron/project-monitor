@@ -7,8 +7,10 @@ steps:
 - script: |
     npm install -g @vscode/vsce
     npm install
-    npm run compile --if-present
-  displayName: "Install and build"
+  displayName: "Install vsce and dependencies"
+
+- script: npm run compile
+  displayName: "Compile TypeScript"
 
 - task: AzureCLI@2
   displayName: "Publish using managed identity"
