@@ -2,9 +2,10 @@
   "name": "hedron-project-monitor",
   "displayName": "Hedron Project Monitor",
   "description": "VS Code dashboard for monitoring local project folders, serving status, Git state, TODOs, and extension publishing state.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "everyhedron",
   "license": "MIT",
+  "icon": "media/icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/everyhedron/project-monitor.git"
@@ -27,6 +28,7 @@
   "main": "./out/extension.js",
   "files": [
     "out/**",
+    "media/**",
     "LICENSE",
     "README.md",
     "CHANGELOG.md",
