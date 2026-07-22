@@ -1,6 +1,6 @@
 {
-  "name": "project-monitor",
-  "displayName": "Project Monitor",
+  "name": "hedron-project-monitor",
+  "displayName": "Hedron Project Monitor",
   "description": "VS Code dashboard for monitoring local project folders, serving status, Git state, TODOs, and extension publishing state.",
   "version": "0.0.1",
   "publisher": "everyhedron",
