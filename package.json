@@ -21,9 +21,7 @@
     "Other"
   ],
   "activationEvents": [
-    "onWebviewPanel:projectMonitor.dashboard",
-    "onCommand:projectMonitor.openDashboard",
-    "onCommand:projectMonitor.refresh"
+    "onWebviewPanel:projectMonitor.dashboard"
   ],
   "main": "./out/extension.js",
   "files": [
